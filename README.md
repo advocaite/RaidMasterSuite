@@ -3,6 +3,8 @@
 An all-in-one raid utility addon for **World of Warcraft 3.3.5a (WOTLK)**. Soft Res, Hard Res, DKP, Gold-bid auctions, BiS scanning, chat advertising, and more — bundled into a single dark/gold themed UI inspired by modern Zygor.
 
 > **Status:** v0.1.0 — actively developed. Patches and feature requests welcome.
+>
+> **Repo:** https://github.com/advocaite/RaidMasterSuite — open an [Issue](https://github.com/advocaite/RaidMasterSuite/issues) for bugs / feature requests.
 
 ---
 

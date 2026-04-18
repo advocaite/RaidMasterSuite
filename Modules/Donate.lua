@@ -8,6 +8,7 @@ local M = RMS:RegisterModule("donate", { title = "Donate", order = 50 })
 -- These are the addon author's defaults. Forks/users can edit if hosting elsewhere.
 M.AUTHOR_CHAR  = "Mishdk"
 M.AUTHOR_REALM = "Icecrown"
+M.GITHUB_URL   = "https://github.com/advocaite/RaidMasterSuite"
 
 -- ---------- chat helpers ----------
 function M:PrintInfoToChat()
@@ -134,9 +135,41 @@ function M:BuildUI(parent)
     Skin:AttachTooltip(fillBtn, "Auto-fill Send Mail",
         {"Stand at a mailbox with the Mail UI open, then click this. The recipient and a subject will be filled in for you - just attach the gold and send."})
 
+    -- ===== GitHub / Issues =====
+    local ghHdr = Skin:Header(panel, "GitHub / Bug Reports / Feature Requests")
+    ghHdr:SetPoint("TOPLEFT", goldBody, "BOTTOMLEFT", 0, -10)
+    ghHdr:SetPoint("RIGHT", panel, "RIGHT", -8, 0)
+
+    local ghBody = Skin:Panel(panel)
+    ghBody:SetPoint("TOPLEFT", ghHdr, "BOTTOMLEFT", 0, -2)
+    ghBody:SetPoint("RIGHT", panel, "RIGHT", -8, 0)
+    ghBody:SetHeight(70)
+
+    local ghIntro = ghBody:CreateFontString(nil, "OVERLAY")
+    Skin:Font(ghIntro, 11, false); ghIntro:SetTextColor(unpack(C.text))
+    ghIntro:SetPoint("TOPLEFT",  8, -8)
+    ghIntro:SetPoint("TOPRIGHT", -8, -8)
+    ghIntro:SetHeight(16)
+    ghIntro:SetJustifyH("LEFT")
+    ghIntro:SetText("Source code, issue tracker, and releases:")
+
+    -- selectable URL (WoW can't open URLs; users copy with Ctrl+C)
+    local urlEdit = Skin:EditBox(ghBody, 1, 22)
+    urlEdit:SetPoint("TOPLEFT",  ghIntro, "BOTTOMLEFT",  0, -4)
+    urlEdit:SetPoint("TOPRIGHT", ghIntro, "BOTTOMRIGHT", 0, -4)
+    urlEdit:SetText(self.GITHUB_URL)
+    urlEdit:SetTextColor(unpack(C.accent))
+    urlEdit:SetCursorPosition(0)
+    urlEdit:SetScript("OnMouseUp",  function(s) s:HighlightText() end)
+    urlEdit:SetScript("OnEditFocusGained", function(s) s:HighlightText() end)
+    -- prevent typing (read-only-ish); restore text on change
+    urlEdit:SetScript("OnTextChanged", function(s)
+        if s:GetText() ~= M.GITHUB_URL then s:SetText(M.GITHUB_URL); s:HighlightText() end
+    end)
+
     -- ===== Print to chat (always available) =====
     local printBtn = Skin:Button(panel, "Print donation info to chat", 240, 22)
-    printBtn:SetPoint("TOPLEFT", goldBody, "BOTTOMLEFT", 0, -10)
+    printBtn:SetPoint("TOPLEFT", ghBody, "BOTTOMLEFT", 0, -10)
     printBtn:SetScript("OnMouseUp", function() self:PrintInfoToChat() end)
 
     -- ===== thank you note =====

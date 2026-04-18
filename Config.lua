@@ -86,7 +86,29 @@ function Config:BuildPanel(parent)
     header:SetPoint("TOPLEFT", 8, -8)
     header:SetPoint("TOPRIGHT", -8, -8)
 
-    local y = -50
+    -- Bug-report / feature-request banner under the header
+    local issueLbl = panel:CreateFontString(nil, "OVERLAY")
+    Skin:Font(issueLbl, 11, false)
+    issueLbl:SetTextColor(unpack(C.text))
+    issueLbl:SetPoint("TOPLEFT",  header, "BOTTOMLEFT",  4, -6)
+    issueLbl:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", -4, -6)
+    issueLbl:SetHeight(16); issueLbl:SetJustifyH("LEFT")
+    issueLbl:SetText("Found a bug or want a feature? |cffffd070Open an issue on GitHub:|r")
+
+    local issueUrl = Skin:EditBox(panel, 1, 22)
+    issueUrl:SetPoint("TOPLEFT",  issueLbl, "BOTTOMLEFT",  0, -2)
+    issueUrl:SetPoint("TOPRIGHT", issueLbl, "BOTTOMRIGHT", 0, -2)
+    local URL = "https://github.com/advocaite/RaidMasterSuite/issues"
+    issueUrl:SetText(URL)
+    issueUrl:SetTextColor(unpack(C.accent))
+    issueUrl:SetCursorPosition(0)
+    issueUrl:SetScript("OnMouseUp",         function(s) s:HighlightText() end)
+    issueUrl:SetScript("OnEditFocusGained", function(s) s:HighlightText() end)
+    issueUrl:SetScript("OnTextChanged",     function(s)
+        if s:GetText() ~= URL then s:SetText(URL); s:HighlightText() end
+    end)
+
+    local y = -90
     local function addCheck(label, path, tooltip)
         local cb = Skin:CheckBox(panel, label)
         cb:SetPoint("TOPLEFT", 16, y)
