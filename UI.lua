@@ -13,7 +13,7 @@ function UI:Build()
     local C = Skin.COLOR
 
     local f = CreateFrame("Frame", "RaidMasterSuiteFrame", UIParent)
-    f:SetSize(820, 540)
+    f:SetSize(900, 640)
     f:SetPoint("CENTER")
     f:SetFrameStrata("HIGH")
     f:SetClampedToScreen(true)
