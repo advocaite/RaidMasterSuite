@@ -1,0 +1,23 @@
+## Interface: 30300
+## Title: Raid Master Suite
+## Notes: All-in-one raid utility: Soft Res, Hard Res, DKP, Gold Bid, BiS scan
+## Author: rodneywowwow
+## Version: 0.1.0
+## SavedVariables: RaidMasterSuiteDB
+## SavedVariablesPerCharacter: RaidMasterSuiteCharDB
+
+Core.lua
+Skin.lua
+Comm.lua
+Config.lua
+UI.lua
+LootPicker.lua
+Data\BiSData.lua
+Data\LootDB.lua
+Modules\SoftRes.lua
+Modules\HardRes.lua
+Modules\DKP.lua
+Modules\GoldBid.lua
+Modules\BiS.lua
+Modules\Advertising.lua
+Modules\Donate.lua

@@ -1,0 +1,32 @@
+# Dev-only tooling -- not shipped with the addon.
+# tools/ contains Python scrapers that regenerate Data/*.lua from external
+# sources (AtlasLoot, WoWSims). End users don't need them.
+tools/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Backups / temp
+*.bak
+*.orig
+*.tmp
+*.rej
+
+# Archives (usually generated when packaging)
+*.zip
+*.rar
+*.tar.gz
+
+# Local notes / scratch
+NOTES.md
+TODO.md
+scratch/
