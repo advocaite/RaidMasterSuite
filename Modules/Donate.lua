@@ -7,7 +7,7 @@ local M = RMS:RegisterModule("donate", { title = "Donate", order = 50 })
 
 -- These are the addon author's defaults. Forks/users can edit if hosting elsewhere.
 M.AUTHOR_CHAR  = "Mishdk"
-M.AUTHOR_REALM = "Icecrown"
+M.AUTHOR_REALM = "Onyxia"
 M.GITHUB_URL   = "https://github.com/advocaite/RaidMasterSuite"
 
 -- ---------- chat helpers ----------

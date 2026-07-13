@@ -14,8 +14,9 @@ local SLOTS = {
     "MainHand", "OffHand", "Ranged", "Relic",
 }
 
--- Green checkmark glyph (UTF-8 U+2713)
-local OWNED_MARK = "|cff60ff60\226\156\147|r "
+-- Green "owned" tick. Inline texture, because the shipped Segoe UI font has
+-- no U+2713 glyph and renders it as "?".
+local OWNED_MARK = "|TInterface\\RaidFrame\\ReadyCheck-Ready:12:12|t "
 
 -- True if the player owns this item (in bags OR equipped).
 local function playerHasItem(id)
@@ -58,58 +59,109 @@ local function myClass()
     return token
 end
 
+-- ---------- phase selection ----------
+-- Data ships per phase in RMS.BiSPhases (0 = pre-raid). The selected phase is
+-- stored account-wide; default is the newest phase that has data.
+function M:AvailablePhases()
+    local out = {}
+    if RMS.BiSPhases then
+        for n in pairs(RMS.BiSPhases) do out[#out+1] = n end
+        table.sort(out)
+    end
+    return out
+end
+
+function M:GetPhase()
+    if not RMS.BiSPhases then return nil end
+    local want = RMS.db and RMS.db.bis and tonumber(RMS.db.bis.phase)
+    if want and RMS.BiSPhases[want] then return want end
+    local maxn
+    for n in pairs(RMS.BiSPhases) do
+        if not maxn or n > maxn then maxn = n end
+    end
+    return maxn
+end
+
+function M:SetPhase(n)
+    if not (RMS.BiSPhases and RMS.BiSPhases[n]) then return end
+    RMS.db.bis = RMS.db.bis or {}
+    RMS.db.bis.phase = n
+    RMS:Print("BiS phase set to %s.", (RMS.BiSPhaseInfo and RMS.BiSPhaseInfo[n]) or ("P"..n))
+    self:Refresh()
+end
+
+function M:PhaseLabel(n)
+    return (RMS.BiSPhaseInfo and RMS.BiSPhaseInfo[n]) or (n == 0 and "Pre-Raid" or ("P"..tostring(n)))
+end
+
 -- ---------- BiS lookup ----------
--- merged list = seeded[class][spec] + charDB.bis.overrides
+-- merged list = seeded[phase][class][spec] + charDB.bis.overrides
+-- Each slot is an ORDERED array: rank 1 = current-phase BiS, later entries
+-- are alternates (including earlier-phase items cascaded in by the scraper).
 function M:GetBiSFor(class, spec)
     local out = {}
-    local seed = RMS.BiSSeed and RMS.BiSSeed[class] and RMS.BiSSeed[class][spec]
+    local phaseData = (RMS.BiSPhases and RMS.BiSPhases[self:GetPhase()]) or RMS.BiSSeed
+    local seed = phaseData and phaseData[class] and phaseData[class][spec]
     if seed then
         for slot, ids in pairs(seed) do
-            out[slot] = {}
-            for _, id in ipairs(ids) do out[slot][id] = true end
+            local arr = {}
+            for _, id in ipairs(ids) do arr[#arr+1] = id end
+            out[slot] = arr
         end
     end
-    -- only the local player has overrides
+    -- only the local player has overrides; an override becomes the preferred item
     local me = RMS:PlayerName()
     local mc = self.peers[me]
     if mc and mc.class == class and mc.spec == spec and RMS.charDB.bis then
         for slot, id in pairs(RMS.charDB.bis.overrides or {}) do
-            out[slot] = out[slot] or {}
-            out[slot][tonumber(id) or id] = true
+            id = tonumber(id) or id
+            local arr = out[slot] or {}
+            out[slot] = arr
+            for i = #arr, 1, -1 do
+                if arr[i] == id then table.remove(arr, i) end
+            end
+            table.insert(arr, 1, id)
         end
     end
     return out
 end
 
+-- Where does itemID rank for this class+spec? Returns slot, rank or nil.
+function M:FindBiSRank(itemID, class, spec)
+    local list = self:GetBiSFor(class, spec)
+    for slot, ids in pairs(list) do
+        for rank, id in ipairs(ids) do
+            if id == itemID then return slot, rank end
+        end
+    end
+    return nil
+end
+
 -- Quick "is this itemID BiS for any slot of this class+spec"
 function M:IsBiS(itemID, class, spec)
-    local list = self:GetBiSFor(class, spec)
-    for _, ids in pairs(list) do
-        if ids[itemID] then return true end
-    end
-    return false
+    return self:FindBiSRank(itemID, class, spec) ~= nil
 end
 
 -- For loot scan: find every peer whose BiS contains itemID. Returns
--- list of {player, class, spec, slot}
+-- list of {player, class, spec, slot, rank} (rank 1 = BiS, 2+ = alternate)
 function M:NeedersFor(itemID)
     itemID = tonumber(itemID); if not itemID then return {} end
     local needers = {}
     for player, info in pairs(self.peers) do
         if info.class and info.spec then
-            local list = self:GetBiSFor(info.class, info.spec)
-            for slot, ids in pairs(list) do
-                if ids[itemID] then
-                    needers[#needers+1] = {
-                        player = player, class = info.class,
-                        spec = info.spec, slot = slot,
-                    }
-                    break
-                end
+            local slot, rank = self:FindBiSRank(itemID, info.class, info.spec)
+            if slot then
+                needers[#needers+1] = {
+                    player = player, class = info.class,
+                    spec = info.spec, slot = slot, rank = rank,
+                }
             end
         end
     end
-    table.sort(needers, function(a, b) return a.player < b.player end)
+    table.sort(needers, function(a, b)
+        if a.rank ~= b.rank then return (a.rank or 99) < (b.rank or 99) end
+        return a.player < b.player
+    end)
     return needers
 end
 
@@ -166,6 +218,11 @@ local function classDisplay(token)
 end
 
 local function onLootOpened()
+    -- as master looter the Master Loot window already shows BiS tags per
+    -- candidate; skip the duplicate needers popup
+    if RMS:IsMasterLooter() and RMS.db.masterloot and RMS.db.masterloot.autoOpen ~= false then
+        return
+    end
     local items = getLootIDs()
     local rows = {}
     for _, it in ipairs(items) do
@@ -252,7 +309,8 @@ function M:ShowNeedersPopup(rows)
             r.item:SetText(item.link or ("item:"..item.id))
             local parts = {}
             for _, n in ipairs(item.needers) do
-                parts[#parts+1] = ("%s%s|r (%s)"):format(CLASS_COLOR(n.class), n.player, n.slot)
+                local rankTag = (n.rank and n.rank > 1) and (", |cff999999alt"..(n.rank - 1).."|r") or ""
+                parts[#parts+1] = ("%s%s|r (%s%s)"):format(CLASS_COLOR(n.class), n.player, n.slot, rankTag)
             end
             r.needers:SetText(table.concat(parts, "  "))
         end
@@ -368,10 +426,50 @@ function M:BuildUI(parent)
     rebroadcastBtn:SetPoint("LEFT", meLabel, "RIGHT", 12, 0)
     rebroadcastBtn:SetScript("OnMouseUp", function() self:BroadcastMySpec() end)
 
+    -- phase selector row
+    local phaseLabel = panel:CreateFontString(nil, "OVERLAY")
+    Skin:Font(phaseLabel, 12, true)
+    phaseLabel:SetTextColor(unpack(C.text))
+    phaseLabel:SetPoint("TOPLEFT", meLabel, "BOTTOMLEFT", 0, -10)
+    phaseLabel:SetText("Phase:")
+
+    self._phaseBtns = {}
+    local prevBtn
+    for _, n in ipairs(self:AvailablePhases()) do
+        local caption = (n == 0) and "Pre" or ("P"..n)
+        local b = Skin:TabButton(panel, caption, (n == 0) and 44 or 36, 20)
+        b.text:ClearAllPoints(); b.text:SetPoint("CENTER")
+        if prevBtn then
+            b:SetPoint("LEFT", prevBtn, "RIGHT", 4, 0)
+        else
+            b:SetPoint("LEFT", phaseLabel, "RIGHT", 8, 2)
+        end
+        b:SetScript("OnClick", function() self:SetPhase(n) end)
+        b:SetScript("OnEnter", function(s)
+            if not s.selected then s:SetBackdropColor(unpack(C.bgHover)) end
+            GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(self:PhaseLabel(n), C.textHead[1], C.textHead[2], C.textHead[3])
+            GameTooltip:AddLine("Show BiS lists for this content phase.", C.text[1], C.text[2], C.text[3], true)
+            GameTooltip:Show()
+        end)
+        b:SetScript("OnLeave", function(s)
+            if not s.selected then s:SetBackdropColor(unpack(C.bgRowAlt)) end
+            GameTooltip:Hide()
+        end)
+        self._phaseBtns[n] = b
+        prevBtn = b
+    end
+
     -- left: my BiS list (per-slot)
     local mineHdr = Skin:Header(panel, "Your BiS List")
-    mineHdr:SetPoint("TOPLEFT", meLabel, "BOTTOMLEFT", 0, -10)
+    mineHdr:SetPoint("TOPLEFT", phaseLabel, "BOTTOMLEFT", 0, -12)
     mineHdr:SetWidth(360)
+
+    local ownedHint = mineHdr:CreateFontString(nil, "OVERLAY")
+    Skin:Font(ownedHint, 10, false)
+    ownedHint:SetTextColor(unpack(C.textDim))
+    ownedHint:SetPoint("RIGHT", -8, 0)
+    ownedHint:SetText("|TInterface\\RaidFrame\\ReadyCheck-Ready:11:11|t = you own it")
 
     local function buildSlotRow(parent)
         local r = CreateFrame("Frame", nil, parent)
@@ -465,7 +563,7 @@ function M:BuildUI(parent)
     peersList:SetPoint("RIGHT", panel, "RIGHT", -8, 0)
 
     self._ui = {
-        panel = panel, meLabel = meLabel,
+        panel = panel, meLabel = meLabel, mineHdr = mineHdr,
         mineList = mineList, peersList = peersList,
     }
     self:Refresh()
@@ -485,17 +583,23 @@ function M:Refresh()
         self._ui.meLabel:SetText("Your spec: |cff999999(detecting...)|r")
     end
 
+    -- phase selector state + list header
+    local curPhase = self:GetPhase()
+    if self._phaseBtns then
+        for n, b in pairs(self._phaseBtns) do b:SetSelected(n == curPhase) end
+    end
+    if self._ui.mineHdr and curPhase then
+        self._ui.mineHdr.text:SetText("Your BiS List  --  "..self:PhaseLabel(curPhase))
+    end
+
     -- my BiS list (and warm cache for any unknown items)
     local rows, anyMissing = {}, false
     if cls and spec then
         local list = self:GetBiSFor(cls, spec)
         for _, slot in ipairs(SLOTS) do
-            local set = list[slot]
-            local ids
-            if set then
-                ids = {}
-                for id in pairs(set) do
-                    ids[#ids+1] = id
+            local ids = list[slot]  -- ordered: rank 1 = BiS, rest alternates
+            if ids then
+                for _, id in ipairs(ids) do
                     if warmItem(id) then anyMissing = true end
                 end
             end
@@ -532,11 +636,14 @@ end
 function M:OnSlash(arg)
     arg = arg or ""
     if arg == "broadcast" then return self:BroadcastMySpec() end
+    local ph = arg:match("^phase%s+(%d+)$")
+    if ph then return self:SetPhase(tonumber(ph)) end
     if arg == "test" then
         -- pop a sample popup using whatever is in our local roster
         local sample = {}
         for player, info in pairs(self.peers) do
-            sample[#sample+1] = { id = 50734, link = "[Heaven's Fall, Kryss]",
+            local link = select(2, GetItemInfo(50734)) or "[Heaven's Fall, Kryss]"
+            sample[#sample+1] = { id = 50734, link = link,
                 needers = {{ player = player, class = info.class, spec = info.spec, slot = "MainHand" }}}
             break
         end

@@ -2,7 +2,7 @@
 ## Title: Raid Master Suite
 ## Notes: All-in-one raid utility: Soft Res, Hard Res, DKP, Gold Bid, BiS scan
 ## Author: rodneywowwow
-## Version: 0.1.0
+## Version: 0.2.0
 ## SavedVariables: RaidMasterSuiteDB
 ## SavedVariablesPerCharacter: RaidMasterSuiteCharDB
 
@@ -19,5 +19,7 @@ Modules\HardRes.lua
 Modules\DKP.lua
 Modules\GoldBid.lua
 Modules\BiS.lua
+Modules\PlusOne.lua
+Modules\MasterLoot.lua
 Modules\Advertising.lua
 Modules\Donate.lua

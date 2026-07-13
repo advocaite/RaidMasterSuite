@@ -5,7 +5,7 @@ local RMS = RaidMasterSuite
 local UI = {}
 RMS.UI = UI
 
-local TAB_ORDER = { "softres", "hardres", "dkp", "goldbid", "bis", "advertising", "settings", "donate" }
+local TAB_ORDER = { "softres", "hardres", "plusone", "masterloot", "dkp", "goldbid", "bis", "advertising", "settings", "donate" }
 
 function UI:Build()
     if self.frame then return self.frame end

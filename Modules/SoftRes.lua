@@ -236,6 +236,11 @@ local function finishRollSession()
     if #M.state.log > 30 then M.state.log[#M.state.log] = nil end
     persist()
     M:Refresh()
+
+    -- +1 tracker hook: every client resolves the same winner locally
+    local po = RMS:GetModule("plusone")
+    if po and po.OnRollWin then po:OnRollWin(winner.player, rollSession.itemLink) end
+
     rollSession = nil
 end
 
@@ -256,6 +261,8 @@ M.events = {
     end,
     PLAYER_LOGIN = function(self)
         restore()
+        -- the tab may have been built before restore ran; repaint it
+        self:Refresh()
         self._wasInGroup = RMS:InGroup()
         -- defer ~3s so other clients have finished loading before we ask
         if self._wasInGroup then

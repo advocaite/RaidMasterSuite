@@ -1,8 +1,8 @@
 # Raid Master Suite
 
-An all-in-one raid utility addon for **World of Warcraft 3.3.5a (WOTLK)**. Soft Res, Hard Res, DKP, Gold-bid auctions, BiS scanning, chat advertising, and more — bundled into a single dark/gold themed UI inspired by modern Zygor.
+An all-in-one raid utility addon for **World of Warcraft 3.3.5a (WOTLK)**. Soft Res, Hard Res, +1 loot tracking, master loot distribution, DKP, Gold-bid auctions, BiS scanning, chat advertising, and more — bundled into a single dark/gold themed UI inspired by modern Zygor.
 
-> **Status:** v0.1.0 — actively developed. Patches and feature requests welcome.
+> **Status:** v0.2.0 — actively developed. Patches and feature requests welcome.
 >
 > **Repo:** https://github.com/advocaite/RaidMasterSuite — open an [Issue](https://github.com/advocaite/RaidMasterSuite/issues) for bugs / feature requests.
 
@@ -14,9 +14,11 @@ An all-in-one raid utility addon for **World of Warcraft 3.3.5a (WOTLK)**. Soft 
 |--------------|---------------------------------------------------------------------------------------------|
 | **Soft Res** | Players reserve items they want; SR holders get priority on `/roll`. Multi-item per player. |
 | **Hard Res** | Leader pre-assigns items to specific players. Loot drop reminders for the master looter.    |
+| **+1 Loot**  | Roll winners get marked +1 automatically; fewer +1s = higher priority. Raid-synced.         |
+| **Master Loot** | Auto-popup for the ML with every drop above the loot threshold; candidates show +1 / BiS / SR / HR tags; call rolls and hand out loot in one click. |
 | **DKP**      | Per-guild standings, officer-managed award/deduct, presets, full audit log. GUILD-synced.   |
 | **Gold Bid** | Live auction window for an item. Trade-window auto-detect of payment. Persistent history.   |
-| **BiS Scan** | Detects each raider's class/spec, scans every loot drop, popup of who needs it.             |
+| **BiS Scan** | Detects each raider's class/spec, scans every loot drop, popup of who needs it. Per-phase BiS lists (Pre-Raid → ICC). |
 | **Advertise**| Compose recruitment messages and broadcast to selected chat channels on a timer.            |
 | **Settings** | All thresholds, defaults, and toggles (auto-open on login, etc.)                            |
 | **Donate**   | How to support the author via server coin gifting or in-game gold mail.                     |
@@ -78,6 +80,10 @@ That's it — no Ace, no LibStub, no required deps. The addon is fully self-cont
 | `/rms goldbid <itemlink>`  | Start a Gold Bid for the linked item        |
 | `/rms dkp sync`            | Force a DKP sync request to your guild      |
 | `/rms bis test`            | Pop a sample BiS-needers popup              |
+| `/rms bis phase 3`         | Switch BiS lists to phase 3 (0 = pre-raid)  |
+| `/rms plusone <name> +1`   | Manually adjust a player's +1 count         |
+| `/rms plusone reset`       | Reset all +1 counts (leader/assist)         |
+| `/rms masterloot show`     | Open the master loot window (preview if no corpse open) |
 | `/rms advertising start`   | Start the advertising auto-broadcast loop   |
 | `/rms donate chat`         | Print the donation info to your chat        |
 
@@ -107,10 +113,24 @@ Leader pre-assigns specific items to specific players. When the master looter op
 - If trade fails, host clicks **Next Bidder** → item is offered to runner-up.
 - **Full History** browser: every past session saved (cap 200), with a **By Item** view showing avg / max / min sale price.
 
+### +1 Loot
+- Guild-style "+1" system: whoever wins a piece of loot gets marked **+1**; players on fewer +1s have priority on later drops.
+- Auto-detects group-loot roll wins (`X won: [item]`) and Soft Res `/roll` session winners — every client sees the same chat lines so counts stay in sync without traffic.
+- Manual +/- per player (leader/assist only, broadcast to the raid), adjustable minimum quality (default Epic).
+- Counts persist across reloads until the leader hits **Reset All**. Late joiners auto-sync from the leader.
+
+### Master Loot
+- When you're the **master looter** and open a corpse, a window pops with every drop at or above the **loot threshold set for the dungeon** (or a fixed quality of your choice).
+- Click a drop → see every eligible candidate with their **+1 count** and **BiS / SoftRes / HardRes** tags, sorted hard-res first, then rolls, then fewest +1s.
+- **Call Roll** announces the item and collects `/roll`s right in the window — timer configurable (3–60s, default 8), with an optional "5... 4... 3... 2... 1..." raid-chat countdown before the winner is announced.
+- **Give** hands the item out via `GiveMasterLoot`, announces the award, logs it to history, and (optionally) marks the winner +1 automatically.
+
 ### BiS Scan
 - Each raider's class+spec auto-detected from talent tab points.
 - Specs broadcast over the addon channel so the whole raid knows.
-- Seed data scraped from [WoWSims wotlk](https://github.com/wowsims/wotlk) Phase 4 (ICC) gear sets — 30 specs, all 18 slots.
+- Seed data scraped from [WoWSims wotlk](https://github.com/wowsims/wotlk) gear sets for **every phase**: Pre-Raid, P1 (Naxx), P2 (Ulduar), P3 (ToC), P4 (ICC) — 30 specs, all 18 slots.
+- **Phase selector** in the BiS tab (also `/rms bis phase N`) so progressive realms see the right list, not just ICC.
+- Every phase has **alternates**: earlier-phase BiS cascades into later phases as ranked options (`+N alt` badge per slot), so you always see what to chase if the top item hasn't dropped.
 - On `LOOT_OPENED`, scans every loot item against every raider's BiS list. Pops a window listing who needs what, color-coded by class.
 - Per-row green ✓ tick if you already own the item (bags or equipped).
 - `+N alt` badge per slot opens a popup listing all alternates with hover tooltips.
@@ -149,10 +169,12 @@ RaidMasterSuite/
 │   ├── DKP.lua
 │   ├── GoldBid.lua
 │   ├── BiS.lua
+│   ├── PlusOne.lua
+│   ├── MasterLoot.lua
 │   ├── Advertising.lua
 │   └── Donate.lua
 ├── Data/
-│   ├── BiSData.lua          # auto-generated BiS seed (WoWSims P4)
+│   ├── BiSData.lua          # auto-generated BiS seed (WoWSims, all phases)
 │   └── LootDB.lua           # auto-generated loot DB (AtlasLoot)
 ├── Skin/                    # textures, fonts (subset borrowed from Zygor RM)
 └── tools/                   # dev-only Python scrapers (not shipped to users; gitignored)
@@ -169,7 +191,7 @@ The two big data files in `Data/` are produced by the scripts in `tools/`. Re-ru
 ```bash
 cd RaidMasterSuite/
 python tools/extract_lootdb.py    # rescrape AtlasLoot -> Data/LootDB.lua
-python tools/extract_bis.py       # refetch WoWSims P4 -> Data/BiSData.lua
+python tools/extract_bis.py       # refetch WoWSims (all phases) -> Data/BiSData.lua
 ```
 
 Both scripts produce CRLF-line-ending files (required for the WoW 3.3.5a Lua loader).

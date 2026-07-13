@@ -9,11 +9,20 @@ local M = RMS:RegisterModule("advertising", { title = "Advertise", order = 6 })
 -- ---------- defaults ----------
 local DEFAULTS = {
     raidName    = "ICC 25",
-    runType     = "Gold Run",
+    runType     = "",      -- blank by default; cycle the button to pick one
     minGS       = 5800,
     achievement = "ICC10/25 exp preferred",
     discord     = "",
     notes       = "PST for invite",
+    resBoE      = false,   -- "BOE reserved"
+    resPatterns = false,   -- "Patterns reserved"
+    resOrbs     = false,   -- "Orbs reserved"
+    showRMSLine = true,    -- append "(RMS addon for bidding)"
+    needClasses = {},      -- ["CLASS"] = any-spec, ["CLASS:Spec"] = specific
+    needTanks   = 0,       -- role counts; 0 = not shown (compact alternative
+    needHealers = 0,       -- to class picks when the 255-char limit bites)
+    needMelee   = 0,
+    needRanged  = 0,
     customMsg   = "",      -- if set, overrides the built message
     template    = "auto",  -- "auto" | "custom"
     interval    = 90,      -- seconds; min 30
@@ -22,8 +31,58 @@ local DEFAULTS = {
 }
 
 local RUN_TYPES = {
-    "Gold Run", "DKP", "Soft Res", "Hard Res", "Loot Council", "Free Loot",
+    "", "Gold Run", "DKP", "Soft Res", "Hard Res", "Loot Council", "Free Loot",
 }
+
+-- classes + ad-friendly spec shorthands for the "Need:" picker
+local CLASS_SPECS = {
+    { token = "DEATHKNIGHT", name = "Death Knight", specs = { "Blood", "Frost", "Unholy" } },
+    { token = "DRUID",   name = "Druid",   specs = { "Balance", "Feral", "Resto" } },
+    { token = "HUNTER",  name = "Hunter",  specs = { "BM", "MM", "Surv" } },
+    { token = "MAGE",    name = "Mage",    specs = { "Arcane", "Fire", "Frost" } },
+    { token = "PALADIN", name = "Paladin", specs = { "Holy", "Prot", "Ret" } },
+    { token = "PRIEST",  name = "Priest",  specs = { "Disc", "Holy", "Shadow" } },
+    { token = "ROGUE",   name = "Rogue",   specs = { "Assa", "Combat", "Sub" } },
+    { token = "SHAMAN",  name = "Shaman",  specs = { "Ele", "Enh", "Resto" } },
+    { token = "WARLOCK", name = "Warlock", specs = { "Affli", "Demo", "Destro" } },
+    { token = "WARRIOR", name = "Warrior", specs = { "Arms", "Fury", "Prot" } },
+}
+
+local function classColor(token)
+    local c = RAID_CLASS_COLORS and RAID_CLASS_COLORS[token]
+    if c then return ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255) end
+    return "|cffffffff"
+end
+
+-- "2 Tanks, 3 Healers, Holy/Prot Paladin, Mage" from role counts + checked
+-- class boxes. Class-level "Any" wins over individual specs.
+function M:NeedSummary()
+    local cfg = self.cfg or {}
+    local nc = cfg.needClasses or {}
+    local parts = {}
+    local function role(n, singular, plural)
+        n = tonumber(n) or 0
+        if n > 0 then parts[#parts+1] = n .. " " .. (n > 1 and plural or singular) end
+    end
+    role(cfg.needTanks,   "Tank",   "Tanks")
+    role(cfg.needHealers, "Healer", "Healers")
+    role(cfg.needMelee,   "Melee",  "Melee")
+    role(cfg.needRanged,  "Ranged", "Ranged")
+    for _, cls in ipairs(CLASS_SPECS) do
+        if nc[cls.token] then
+            parts[#parts+1] = cls.name
+        else
+            local specs = {}
+            for _, spec in ipairs(cls.specs) do
+                if nc[cls.token..":"..spec] then specs[#specs+1] = spec end
+            end
+            if #specs > 0 then
+                parts[#parts+1] = table.concat(specs, "/") .. " " .. cls.name
+            end
+        end
+    end
+    return table.concat(parts, ", ")
+end
 
 -- Common WOTLK PvE achievements raid leaders typically ask for. Grouped by tier.
 local ACHIEVEMENT_LIST = {
@@ -107,10 +166,24 @@ function M:BuildMessage()
     if self.cfg.runType   and self.cfg.runType   ~= "" then parts[#parts+1] = "(" .. self.cfg.runType .. ")" end
     if self.cfg.minGS  and tonumber(self.cfg.minGS)  and tonumber(self.cfg.minGS) > 0
         then parts[#parts+1] = "GS " .. self.cfg.minGS .. "+" end
-    if self.cfg.achievement and self.cfg.achievement ~= "" then parts[#parts+1] = self.cfg.achievement end
+    if self.cfg.achievement and self.cfg.achievement ~= "" then
+        -- a real achievement link means "link it to apply"; plain text passes through
+        if self.cfg.achievement:find("|Hachievement:", 1, true) then
+            parts[#parts+1] = "link " .. self.cfg.achievement
+        else
+            parts[#parts+1] = self.cfg.achievement
+        end
+    end
+    local res = {}
+    if self.cfg.resBoE      then res[#res+1] = "BOE" end
+    if self.cfg.resPatterns then res[#res+1] = "Patterns" end
+    if self.cfg.resOrbs     then res[#res+1] = "Orbs" end
+    if #res > 0 then parts[#parts+1] = table.concat(res, " + ") .. " reserved" end
+    local need = self:NeedSummary()
+    if need ~= "" then parts[#parts+1] = "Need: " .. need end
     if self.cfg.notes  and self.cfg.notes  ~= "" then parts[#parts+1] = self.cfg.notes end
     if self.cfg.discord and self.cfg.discord ~= "" then parts[#parts+1] = "Discord: " .. self.cfg.discord end
-    if RMS.NAME then parts[#parts+1] = "(RMS addon for bidding)" end
+    if self.cfg.showRMSLine then parts[#parts+1] = "(RMS addon for bidding)" end
     return table.concat(parts, " - ")
 end
 
@@ -127,6 +200,11 @@ end
 function M:SendOnce()
     local msg = self:BuildMessage()
     if not msg or msg == "" then RMS:Print("Empty message; aborting.") return end
+    if #msg > 255 then
+        RMS:Print("Ad is %d characters (max 255). Trim fields or use role counts instead of class picks.", #msg)
+        if self.running then self:Stop() end
+        return
+    end
     local slots = self:SelectedChannelSlots()
     if #slots == 0 then RMS:Print("No channels selected.") return end
 
@@ -350,6 +428,111 @@ function M:_ShowAchievementPicker(targetEdit)
     f:Show()
 end
 
+-- ---------- need-classes picker popup ----------
+function M:_ShowNeedPicker()
+    local Skin = RMS.Skin
+    local C    = Skin.COLOR
+
+    if self._needPopup and self._needPopup:IsShown() then
+        self._needPopup:Hide(); return
+    end
+
+    local f = self._needPopup
+    if not f then
+        f = CreateFrame("Frame", "RaidMasterSuiteNeedPicker", UIParent)
+        f:SetSize(430, 378)
+        f:SetPoint("CENTER")
+        f:SetFrameStrata("DIALOG")
+        f:EnableMouse(true); f:SetMovable(true); f:SetClampedToScreen(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", f.StartMoving)
+        f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+        Skin:SetBackdrop(f, C.bgMain, C.accent)
+        tinsert(UISpecialFrames, "RaidMasterSuiteNeedPicker")
+
+        local title = f:CreateFontString(nil, "OVERLAY"); Skin:Font(title, 14, true)
+        title:SetTextColor(unpack(C.accent))
+        title:SetPoint("TOP", 0, -8); title:SetText("NEED CLASSES")
+
+        local close = Skin:CloseButton(f); close:SetPoint("TOPRIGHT", -4, -4)
+        close:SetScript("OnClick", function() f:Hide() end)
+
+        -- role counts: shorter in the ad than listing many classes
+        local roleLbl = f:CreateFontString(nil, "OVERLAY"); Skin:Font(roleLbl, 10, false)
+        roleLbl:SetTextColor(unpack(C.textDim))
+        roleLbl:SetPoint("TOPLEFT", 10, -32)
+        roleLbl:SetText("How many of each role (0 = off):")
+
+        f._roleEdits = {}
+        local function roleEdit(label, key, x)
+            local lbl = f:CreateFontString(nil, "OVERLAY"); Skin:Font(lbl, 10, false)
+            lbl:SetTextColor(unpack(C.text))
+            lbl:SetPoint("TOPLEFT", x, -54)
+            lbl:SetText(label)
+            local e = Skin:EditBox(f, 34, 18)
+            e:SetPoint("TOPLEFT", x + 48, -51)
+            e:SetNumeric(true)
+            e:SetScript("OnTextChanged", function(s)
+                self.cfg[key] = tonumber(s:GetText()) or 0
+                self:_RefreshPreview()
+            end)
+            f._roleEdits[key] = e
+        end
+        roleEdit("Tanks",   "needTanks",   10)
+        roleEdit("Healers", "needHealers", 116)
+        roleEdit("Melee",   "needMelee",   226)
+        roleEdit("Ranged",  "needRanged",  330)
+
+        f._cbs = {}
+        local function addCb(key, label, x, y, w)
+            local cb = Skin:CheckBox(f, label)
+            cb:SetWidth(w)
+            cb:SetPoint("TOPLEFT", x, y)
+            cb.OnValueChanged = function(_, v)
+                self.cfg.needClasses[key] = v and true or nil
+                self:_RefreshPreview()
+            end
+            f._cbs[key] = cb
+            return cb
+        end
+
+        local y = -80
+        for _, cls in ipairs(CLASS_SPECS) do
+            local lbl = f:CreateFontString(nil, "OVERLAY"); Skin:Font(lbl, 11, true)
+            lbl:SetPoint("TOPLEFT", 10, y - 3)
+            lbl:SetWidth(86); lbl:SetJustifyH("LEFT")
+            lbl:SetText(classColor(cls.token)..cls.name.."|r")
+            addCb(cls.token, "Any", 100, y, 48)
+            for i, spec in ipairs(cls.specs) do
+                addCb(cls.token..":"..spec, spec, 154 + (i - 1) * 86, y, 82)
+            end
+            y = y - 24
+        end
+
+        local clearBtn = Skin:Button(f, "Clear All", 80, 22)
+        clearBtn:SetPoint("BOTTOMLEFT", 10, 8)
+        clearBtn:SetScript("OnMouseUp", function()
+            for _, cb in pairs(f._cbs) do cb:SetChecked(false) end
+        end)
+
+        local hint = f:CreateFontString(nil, "OVERLAY"); Skin:Font(hint, 9, false)
+        hint:SetTextColor(unpack(C.textDim))
+        hint:SetPoint("BOTTOMRIGHT", -10, 14)
+        hint:SetText("\"Any\" advertises the whole class and ignores its spec boxes.")
+
+        self._needPopup = f
+    end
+
+    -- sync from saved config on open
+    for key, cb in pairs(f._cbs) do
+        cb:SetChecked(self.cfg.needClasses[key] == true)
+    end
+    for key, e in pairs(f._roleEdits) do
+        if not e:HasFocus() then e:SetText(tostring(tonumber(self.cfg[key]) or 0)) end
+    end
+    f:Show()
+end
+
 -- ---------- slash ----------
 function M:OnSlash(arg)
     arg = (arg or ""):lower()
@@ -384,7 +567,7 @@ function M:BuildUI(parent)
     local formBody = Skin:Panel(panel)
     formBody:SetPoint("TOPLEFT", formHdr, "BOTTOMLEFT", 0, -2)
     formBody:SetWidth(FORM_W)
-    formBody:SetHeight(360)
+    formBody:SetHeight(428)
 
     -- field with width controlled by anchors (always fills form)
     local function field(label, anchor, kind)
@@ -405,21 +588,29 @@ function M:BuildUI(parent)
 
     local raidLbl, raidEdit = field("Raid Name:")
 
-    -- run-type cycler button
+    -- run-type cycler button (left-click cycles, right-click clears)
+    local function typeDisplay()
+        local t = self.cfg.runType
+        return (t == nil or t == "") and "|cff888888(none)|r" or t
+    end
     local typeLbl, typeBtn
     do
         local lbl = formBody:CreateFontString(nil, "OVERLAY"); Skin:Font(lbl, 10, false)
         lbl:SetTextColor(unpack(C.textDim))
         lbl:SetPoint("TOPLEFT", raidLbl, "BOTTOMLEFT", 0, -10); lbl:SetWidth(80); lbl:SetText("Run Type:")
-        local b = Skin:Button(formBody, "Gold Run", 100, 22)
+        local b = Skin:Button(formBody, "", 100, 22)
         b:SetPoint("LEFT", lbl, "RIGHT", 4, 0)
         b:SetPoint("RIGHT", formBody, "RIGHT", -8, 0)
-        b:SetScript("OnMouseUp", function()
-            local cur = self.cfg.runType
-            local idx = 1
-            for i, n in ipairs(RUN_TYPES) do if n == cur then idx = i break end end
-            self.cfg.runType = RUN_TYPES[(idx % #RUN_TYPES) + 1]
-            b:SetText(self.cfg.runType); self:_RefreshPreview()
+        b:SetScript("OnMouseUp", function(_, btn)
+            if btn == "RightButton" then
+                self.cfg.runType = ""
+            else
+                local cur = self.cfg.runType or ""
+                local idx = 1
+                for i, n in ipairs(RUN_TYPES) do if n == cur then idx = i break end end
+                self.cfg.runType = RUN_TYPES[(idx % #RUN_TYPES) + 1]
+            end
+            b:SetText(typeDisplay()); self:_RefreshPreview()
         end)
         typeLbl, typeBtn = lbl, b
     end
@@ -428,16 +619,66 @@ function M:BuildUI(parent)
     local dscLbl,   dscEdit   = field("Discord:",    gsLbl)
     local notesLbl, notesEdit = field("Notes:",      dscLbl)
 
+    -- Reserved-items row: BOE / Patterns / Orbs
+    local resLbl = formBody:CreateFontString(nil, "OVERLAY"); Skin:Font(resLbl, 10, false)
+    resLbl:SetTextColor(unpack(C.textDim))
+    resLbl:SetPoint("TOPLEFT", notesLbl, "BOTTOMLEFT", 0, -14); resLbl:SetWidth(80)
+    resLbl:SetText("Reserved:")
+
+    local function resCheck(label, key, anchor, w)
+        local cb = Skin:CheckBox(formBody, label)
+        cb:SetWidth(w)
+        if anchor then cb:SetPoint("LEFT", anchor, "RIGHT", 6, 0)
+        else cb:SetPoint("LEFT", resLbl, "RIGHT", 4, 0) end
+        cb:SetChecked(self.cfg[key])
+        cb.OnValueChanged = function(_, v)
+            self.cfg[key] = v and true or false
+            self:_RefreshPreview()
+        end
+        return cb
+    end
+    local boeCb = resCheck("BOE",      "resBoE",      nil,   56)
+    local patCb = resCheck("Patterns", "resPatterns", boeCb, 88)
+    resCheck("Orbs", "resOrbs", patCb, 60)
+
+    -- Need-classes row: live summary + picker popup
+    local needLbl = formBody:CreateFontString(nil, "OVERLAY"); Skin:Font(needLbl, 10, false)
+    needLbl:SetTextColor(unpack(C.textDim))
+    needLbl:SetPoint("TOPLEFT", resLbl, "BOTTOMLEFT", 0, -14); needLbl:SetWidth(80)
+    needLbl:SetText("Need:")
+
+    -- fixed offset keeps the button flush right (form is FORM_W wide)
+    local needBtn = Skin:Button(formBody, "Pick", 40, 20)
+    needBtn:SetPoint("LEFT", needLbl, "LEFT", FORM_W - 8 - 40 - 8, 0)
+    needBtn:SetScript("OnMouseUp", function() self:_ShowNeedPicker() end)
+
+    local needSummary = formBody:CreateFontString(nil, "OVERLAY"); Skin:Font(needSummary, 10, false)
+    needSummary:SetTextColor(unpack(C.text))
+    needSummary:SetPoint("LEFT", needLbl, "RIGHT", 4, 0)
+    needSummary:SetPoint("RIGHT", needBtn, "LEFT", -6, 0)
+    needSummary:SetJustifyH("LEFT")
+    needSummary:SetWordWrap(false); needSummary:SetNonSpaceWrap(false)
+
+    -- toggle the "(RMS addon for bidding)" suffix
+    local rmsCb = Skin:CheckBox(formBody, "Show \"(RMS addon for bidding)\"")
+    rmsCb:SetWidth(320)
+    rmsCb:SetPoint("TOPLEFT", needLbl, "BOTTOMLEFT", 0, -14)
+    rmsCb:SetChecked(self.cfg.showRMSLine)
+    rmsCb.OnValueChanged = function(_, v)
+        self.cfg.showRMSLine = v and true or false
+        self:_RefreshPreview()
+    end
+
     -- Achievement: multi-line area with paste support
     local achLbl = formBody:CreateFontString(nil, "OVERLAY"); Skin:Font(achLbl, 10, false)
     achLbl:SetTextColor(unpack(C.textDim))
-    achLbl:SetPoint("TOPLEFT", notesLbl, "BOTTOMLEFT", 0, -10); achLbl:SetWidth(80); achLbl:SetText("Achievement:")
+    achLbl:SetPoint("TOPLEFT", rmsCb, "BOTTOMLEFT", 0, -10); achLbl:SetWidth(80); achLbl:SetText("Achievement:")
     local achHint = formBody:CreateFontString(nil, "OVERLAY"); Skin:Font(achHint, 9, false)
     achHint:SetTextColor(unpack(C.textDim))
     achHint:SetPoint("TOPLEFT", achLbl, "TOPLEFT", 90, 0); achHint:SetPoint("RIGHT", formBody, "RIGHT", -8, 0)
     achHint:SetJustifyH("LEFT"); achHint:SetText("(shift-click achievements to insert)")
 
-    local achEdit = Skin:EditBox(formBody, 100, 60)
+    local achEdit = Skin:EditBox(formBody, 100, 50)
     achEdit:SetPoint("TOPLEFT", achLbl, "BOTTOMLEFT", 8, -4)
     achEdit:SetPoint("RIGHT", formBody, "RIGHT", -34, 0)  -- leave room for Pick button
     achEdit:SetMultiLine(true); achEdit:SetAutoFocus(false)
@@ -495,7 +736,7 @@ function M:BuildUI(parent)
     bindEdit(achEdit,   "achievement")
     bindEdit(dscEdit,   "discord")
     bindEdit(notesEdit, "notes")
-    typeBtn:SetText(self.cfg.runType or "Gold Run")
+    typeBtn:SetText(typeDisplay())
 
     -- ============ right column: channels + controls ============
     local chHdr = Skin:Header(panel, "Channels")
@@ -610,7 +851,8 @@ function M:BuildUI(parent)
         sendBtn = sendBtn, startBtn = startBtn, stopBtn = stopBtn,
         logScroll = logScroll,
         raidEdit = raidEdit, gsEdit = gsEdit, achEdit = achEdit, dscEdit = dscEdit,
-        notesEdit = notesEdit, typeBtn = typeBtn,
+        notesEdit = notesEdit, typeBtn = typeBtn, needSummary = needSummary,
+        prevHdr = prevHdr,
     }
     self:Refresh()
     return panel
@@ -618,7 +860,18 @@ end
 
 function M:_RefreshPreview()
     if not self._ui then return end
-    self._ui.prev:SetText(self:BuildMessage())
+    local msg = self:BuildMessage()
+    self._ui.prev:SetText(msg)
+    if self._ui.prevHdr then
+        -- chat messages cap at 255 characters (links count in full)
+        local n = #msg
+        local color = (n > 255) and "|cffff5050" or "|cff999999"
+        self._ui.prevHdr:SetText(("Preview: %s%d/255|r"):format(color, n))
+    end
+    if self._ui.needSummary then
+        local need = self:NeedSummary()
+        self._ui.needSummary:SetText(need ~= "" and need or "|cff666666(none)|r")
+    end
 end
 
 function M:Refresh()

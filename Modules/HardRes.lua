@@ -198,6 +198,8 @@ M.events = {
     LOOT_OPENED = function(self) onLootOpened() end,
     PLAYER_LOGIN = function(self)
         restore()
+        -- the tab may have been built before restore ran; repaint it
+        self:Refresh()
         self._wasInGroup = RMS:InGroup()
         if self._wasInGroup then
             local d = CreateFrame("Frame"); local elapsed = 0
