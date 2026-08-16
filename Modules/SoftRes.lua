@@ -255,7 +255,12 @@ M.events = {
     CHAT_MSG_RAID_WARNING = function(self, _, msg)
         local link = msg:match("(|c%x+|Hitem:.-|h.-|h|r)")
         local id   = link and tonumber(link:match("item:(%d+)"))
-        if id and M.state.items[id] and msg:lower():find("roll") then
+        if not id then return end
+        -- the Master Loot window runs its own roll session for this item;
+        -- don't start a duplicate SR session on top of it
+        local ml = RMS:GetModule("masterloot")
+        if ml and ml._roll and not ml._roll.done and tonumber(ml._roll.id) == id then return end
+        if M.state.items[id] and msg:lower():find("roll") then
             startRollSession(id, link)
         end
     end,

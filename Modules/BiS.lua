@@ -180,6 +180,9 @@ RMS.Comm:On("bis", "spec", function(p, sender)
     if not p.class or not p.spec then return end
     M.peers[sender] = { class = p.class, spec = p.spec }
     if M._ui then M:Refresh() end
+    -- Raid Comp coverage depends on peer specs; repaint it as they arrive
+    local rc = RMS:GetModule("raidcomp")
+    if rc and rc._ui then rc:Refresh() end
 end)
 
 -- new player joined -> send our spec; they will broadcast theirs too

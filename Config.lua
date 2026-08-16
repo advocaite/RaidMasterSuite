@@ -179,6 +179,13 @@ function Config:BuildPanel(parent)
     addCheck(col1, "Open window on login / reload", "ui.openOnLogin",
         "Automatically show the Raid Master Suite main window when you log in or reload.")
     addCheck(col1, "Enable debug logging", "debug", "Print verbose debug messages to chat.")
+    local hideMm = addCheck(col1, "Hide minimap button", "minimap.hide",
+        "Remove the round Raid Master Suite button from the minimap edge.")
+    local hideMmOrig = hideMm.OnValueChanged
+    hideMm.OnValueChanged = function(s, v)
+        hideMmOrig(s, v)
+        if RMS.MinimapButton then RMS.MinimapButton:UpdateShown() end
+    end
 
     addSection(col1, "Soft Res")
     addCheck(col1, "Auto-accept reservations", "softres.autoAccept", "Automatically accept incoming SR submissions when raid leader.")

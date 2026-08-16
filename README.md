@@ -16,6 +16,7 @@ An all-in-one raid utility addon for **World of Warcraft 3.3.5a (WOTLK)**. Soft 
 | **Hard Res** | Leader pre-assigns items to specific players. Loot drop reminders for the master looter.    |
 | **+1 Loot**  | Roll winners get marked +1 automatically; fewer +1s = higher priority. Raid-synced.         |
 | **Master Loot** | Auto-popup for the ML with every drop above the loot threshold; candidates show +1 / BiS / SR / HR tags; call rolls and hand out loot in one click. |
+| **Raid Comp** | Pick any WOTLK raid: typical GS ask, tank/healer/dps split, and a live buff & debuff coverage checklist vs your current group. |
 | **DKP**      | Per-guild standings, officer-managed award/deduct, presets, full audit log. GUILD-synced.   |
 | **Gold Bid** | Live auction window for an item. Trade-window auto-detect of payment. Persistent history.   |
 | **BiS Scan** | Detects each raider's class/spec, scans every loot drop, popup of who needs it. Per-phase BiS lists (Pre-Raid → ICC). |
@@ -84,6 +85,7 @@ That's it — no Ace, no LibStub, no required deps. The addon is fully self-cont
 | `/rms plusone <name> +1`   | Manually adjust a player's +1 count         |
 | `/rms plusone reset`       | Reset all +1 counts (leader/assist)         |
 | `/rms masterloot show`     | Open the master loot window (preview if no corpse open) |
+| `/rms raidcomp`            | Open the Raid Comp builder                  |
 | `/rms advertising start`   | Start the advertising auto-broadcast loop   |
 | `/rms donate chat`         | Print the donation info to your chat        |
 
@@ -124,6 +126,12 @@ Leader pre-assigns specific items to specific players. When the master looter op
 - Click a drop → see every eligible candidate with their **+1 count** and **BiS / SoftRes / HardRes** tags, sorted hard-res first, then rolls, then fewest +1s.
 - **Call Roll** announces the item and collects `/roll`s right in the window — timer configurable (3–60s, default 8), with an optional "5... 4... 3... 2... 1..." raid-chat countdown before the winner is announced.
 - **Give** hands the item out via `GiveMasterLoot`, announces the award, logs it to history, and (optionally) marks the winner +1 automatically.
+
+### Raid Comp
+- Pick any WOTLK raid (10/25): shows the **typical pug GS ask**, phase tag, and the standard **tank / healer / dps split** (per-raid notes for zergs, hard modes, attempt limits).
+- **Live buff & debuff coverage**: the full WOTLK checklist (Bloodlust, Kings, Replenishment, 20% armor, the 5%/3% auras, etc.) evaluated against your current group — green check = covered (shows who), yellow = right class present but spec unknown, red = nobody can bring it (shows which specs can).
+- Spec-specific checks use the specs auto-broadcast by the BiS module; raiders without RMS count as class-only.
+- Data lives in `Data/RaidCompData.lua` — curated, editable, built for Warmane-style progression realms. TBC/Classic raids can be appended later.
 
 ### BiS Scan
 - Each raider's class+spec auto-detected from talent tab points.
@@ -171,10 +179,12 @@ RaidMasterSuite/
 │   ├── BiS.lua
 │   ├── PlusOne.lua
 │   ├── MasterLoot.lua
+│   ├── RaidComp.lua
 │   ├── Advertising.lua
 │   └── Donate.lua
 ├── Data/
 │   ├── BiSData.lua          # auto-generated BiS seed (WoWSims, all phases)
+│   ├── RaidCompData.lua     # curated raid comps + buff/debuff providers
 │   └── LootDB.lua           # auto-generated loot DB (AtlasLoot)
 ├── Skin/                    # textures, fonts (subset borrowed from Zygor RM)
 └── tools/                   # dev-only Python scrapers (not shipped to users; gitignored)

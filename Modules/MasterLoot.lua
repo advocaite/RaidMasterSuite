@@ -75,9 +75,14 @@ local function effectiveThreshold()
     return cfg().minQuality or 4
 end
 
-local function announce(msg, warning)
-    local chan = RMS:InRaid() and (warning and RMS:IsAssist() and "RAID_WARNING" or "RAID") or "PARTY"
+-- In a raid, everything goes to raid warning (/rw) when we're allowed to;
+-- falls back to /raid for a non-assist ML, /party in parties.
+local function announce(msg)
     if not RMS:InGroup() then RMS:Print(msg) return end
+    local chan = "PARTY"
+    if RMS:InRaid() then
+        chan = RMS:IsAssist() and "RAID_WARNING" or "RAID"
+    end
     SendChatMessage(msg, chan)
 end
 
@@ -156,15 +161,27 @@ function M:Give(item, playerName)
 end
 
 -- ---------- roll flow ----------
+local ROLL_GRACE   = 1.5  -- keep accepting lag-delayed rolls this long after the timer
+local PREROLL_LIFE = 5    -- rolls typed up to this long before Call Roll still count
+
 function M:CallRoll(item)
     if not item then return end
+    -- self-heal stale candidate lists without needing to reopen the corpse
+    if self._lootOpen then self._candidates = scanCandidates() end
     local t = rollTime()
+    -- seed with pre-rolls: raiders who rolled in the gap since the last
+    -- session ended (they won't roll again -- they think they already did)
+    local rolls = {}
+    for player, e in pairs(self._preRolls or {}) do
+        if (GetTime() - e.at) <= PREROLL_LIFE then rolls[player] = e.value end
+    end
+    self._preRolls = nil
     self._roll = { id = item.id, link = item.link, done = false,
-                   expires = GetTime() + t, rolls = {},
+                   expires = GetTime() + t, rolls = rolls,
                    -- countdown announcements start at 5s remaining (or less
                    -- for short timers); nil = countdown disabled
                    countdownNext = (cfg().countdown ~= false) and math.min(5, t - 1) or nil }
-    announce(("Roll for %s now! (/roll, %ds)"):format(item.link or item.name, t), true)
+    announce(("Roll for %s now! (/roll, %ds)"):format(item.link or item.name, t))
     self:RefreshWindow()
 end
 
@@ -200,18 +217,27 @@ rollPoll:SetScript("OnUpdate", function()
         end
         r.countdownNext = r.countdownNext - 1
     end
-    if remaining <= 0 then finishRoll() end
+    -- grace period: chat lag can deliver a "1-second" roll after the deadline
+    if remaining <= -ROLL_GRACE then finishRoll() end
 end)
 
 local function onSystemMsg(msg)
-    local r = M._roll
-    if not r or r.done then return end
     local player, val, lo, hi = msg:match("^(%S+) rolls (%d+) %((%d+)%-(%d+)%)")
     if not player then return end
     if tonumber(lo) ~= 1 or tonumber(hi) ~= 100 then return end
-    if r.rolls[player] then return end  -- first roll counts
-    r.rolls[player] = tonumber(val)
-    M:RefreshWindow()
+    val = tonumber(val)
+    local r = M._roll
+    if r and not r.done then
+        if r.rolls[player] then return end  -- first roll counts
+        r.rolls[player] = val
+        M:RefreshWindow()
+    else
+        -- no session running: remember it as a pre-roll for the next Call Roll
+        M._preRolls = M._preRolls or {}
+        if not M._preRolls[player] then
+            M._preRolls[player] = { value = val, at = GetTime() }
+        end
+    end
 end
 
 -- ---------- events ----------
