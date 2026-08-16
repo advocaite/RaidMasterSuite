@@ -84,7 +84,8 @@ function M:_RecordSale(sess)
         count = sess.count,
         player = sess.awardingTo, amount = sess.winner.amount, at = time(),
     })
-    broadcast("pot", { total = self:PotTotal(), n = #self:PotSales() })
+    local _, _, per = self:PayoutNumbers()
+    broadcast("pot", { total = self:PotTotal(), n = #self:PotSales(), share = per })
     self:RefreshPot()
 end
 
@@ -469,6 +470,38 @@ RMS.Comm:On("goldbid", "start", function(p, sender)
     M:Refresh(); M:ShowPopup()
 end)
 
+-- ---------- GDKP budgets (players share, leadership sees) ----------
+-- only leader / assist / master looter get replies to a budget request
+local function senderCanSeeBudgets(sender)
+    local n = GetNumRaidMembers()
+    if n == 0 then return true end  -- party/solo testing
+    local method, _, raidId = GetLootMethod()
+    if method == "master" and raidId and raidId > 0
+       and UnitName("raid"..raidId) == sender then
+        return true
+    end
+    for i = 1, n do
+        local name, rank = GetRaidRosterInfo(i)
+        if name == sender then return (rank or 0) >= 1 end
+    end
+    return false
+end
+
+RMS.Comm:On("goldbid", "budgetreq", function(_, sender)
+    if sender == RMS:PlayerName() then return end
+    if not senderCanSeeBudgets(sender) then return end
+    RMS.Comm:SendWhisper("goldbid", "budget", {
+        b = (RMS.charDB and tonumber(RMS.charDB.gdkpBudget)) or 0,
+        g = math.floor(GetMoney() / 10000),
+    }, sender)
+end)
+
+RMS.Comm:On("goldbid", "budget", function(p, sender)
+    M._budgets = M._budgets or {}
+    M._budgets[sender] = { b = tonumber(p.b) or 0, g = tonumber(p.g) or 0 }
+    M:RefreshPayout()
+end)
+
 -- host answers a resync request with a compact start (remaining time + high)
 -- p.id == "any" means "whatever auction you're running" (chat-beacon path)
 RMS.Comm:On("goldbid", "sessreq", function(p, sender)
@@ -508,7 +541,8 @@ end)
 -- pot total pushed by the host so everyone sees the running GDKP pot
 RMS.Comm:On("goldbid", "pot", function(p, sender)
     if sender == RMS:PlayerName() then return end
-    M._remotePot = { total = tonumber(p.total) or 0, n = tonumber(p.n) or 0, host = sender }
+    M._remotePot = { total = tonumber(p.total) or 0, n = tonumber(p.n) or 0,
+                     share = tonumber(p.share), host = sender }
     M:RefreshPot()
 end)
 
@@ -777,9 +811,82 @@ function M:BuildUI(parent)
         self:Refresh()
     end)
 
+    -- Toolbar row 4: my GDKP budget (per character, whispered to leadership
+    -- on request -- shown in the host's payout window)
+    local budgetLbl = panel:CreateFontString(nil, "OVERLAY"); Skin:Font(budgetLbl, 10, false)
+    budgetLbl:SetTextColor(unpack(C.textDim))
+    budgetLbl:SetPoint("TOPLEFT", cancelBtn, "BOTTOMLEFT", 0, -12)
+    budgetLbl:SetText("My GDKP budget (g):")
+
+    local budgetEdit = Skin:EditBox(panel, 70, 20)
+    budgetEdit:SetPoint("LEFT", budgetLbl, "RIGHT", 6, 0)
+    budgetEdit:SetNumeric(true)
+    budgetEdit:SetFrameLevel(panel:GetFrameLevel() + 5)
+    budgetEdit:SetScript("OnMouseDown", function(s) s:SetFocus() end)
+    budgetEdit:SetText(tostring((RMS.charDB and tonumber(RMS.charDB.gdkpBudget)) or 0))
+
+    -- clamp to carried gold, save, return the value
+    local function saveBudget()
+        local gold = math.floor(GetMoney() / 10000)
+        local v = tonumber(budgetEdit:GetText()) or 0
+        if v > gold then
+            v = gold
+            RMS:Print("Budget capped at your carried gold (%dg).", gold)
+        end
+        RMS.charDB.gdkpBudget = v
+        budgetEdit:SetText(tostring(v))
+        return v, gold
+    end
+    budgetEdit:SetScript("OnEditFocusLost", function(s)
+        saveBudget()
+        s:SetBackdropBorderColor(unpack(C.border))
+    end)
+
+    local budgetSetBtn = Skin:Button(panel, "Set", 44, 20)
+    budgetSetBtn:SetPoint("LEFT", budgetEdit, "RIGHT", 6, 0)
+    budgetSetBtn:SetScript("OnMouseUp", function()
+        budgetEdit:ClearFocus()
+        local v, gold = saveBudget()
+        -- push straight to raid leadership (leader/assists/ML) by whisper
+        local payload = { b = v, g = gold }
+        local sent = 0
+        local n = GetNumRaidMembers()
+        if n > 0 then
+            local mlName
+            local method, _, raidId = GetLootMethod()
+            if method == "master" and raidId and raidId > 0 then
+                mlName = UnitName("raid"..raidId)
+            end
+            for i = 1, n do
+                local name, rank = GetRaidRosterInfo(i)
+                if name and name ~= RMS:PlayerName()
+                   and ((rank or 0) >= 1 or name == mlName) then
+                    RMS.Comm:SendWhisper("goldbid", "budget", payload, name)
+                    sent = sent + 1
+                end
+            end
+        elseif RMS:InGroup() then
+            for i = 1, GetNumPartyMembers() do
+                if UnitIsPartyLeader and UnitIsPartyLeader("party"..i) then
+                    RMS.Comm:SendWhisper("goldbid", "budget", payload, UnitName("party"..i))
+                    sent = sent + 1
+                end
+            end
+        end
+        RMS:Print("GDKP budget set: %dg%s.", v,
+            sent > 0 and (" -- sent to leadership ("..sent..")") or "")
+    end)
+    Skin:AttachTooltip(budgetSetBtn, "Set budget",
+        {"Saves your budget (capped at your carried gold) and whispers it to the raid leadership."})
+
+    local budgetHint = panel:CreateFontString(nil, "OVERLAY"); Skin:Font(budgetHint, 9, false)
+    budgetHint:SetTextColor(unpack(C.textDim))
+    budgetHint:SetPoint("LEFT", budgetSetBtn, "RIGHT", 8, 0)
+    budgetHint:SetText("shared only with raid leadership")
+
     -- Active session panel
     local actHdr = Skin:Header(panel, "Active Session")
-    actHdr:SetPoint("TOPLEFT", cancelBtn, "BOTTOMLEFT", 0, -12)
+    actHdr:SetPoint("TOPLEFT", budgetLbl, "BOTTOMLEFT", 0, -18)
     actHdr:SetWidth(380)
 
     local actBody = Skin:Panel(panel)
@@ -970,6 +1077,7 @@ function M:RefreshPot()
         self._ui.potFs:SetText(txt)
     end
     if self.payoutWin and self.payoutWin:IsShown() then self:RefreshPayout() end
+    self:RefreshPotInfo()
 end
 
 function M:RefreshTimerOnly()
@@ -1340,7 +1448,77 @@ local function bonusFlags()
     return RMS.db.goldbid.pot.bonus
 end
 
+-- who may run the payout tools (cut/bonus/reset/announce)
+local function canManagePot()
+    if not RMS:InGroup() then return true end  -- solo testing
+    if RMS:InRaid() then return RMS:IsAssist() or RMS:IsMasterLooter() end
+    return (UnitIsPartyLeader and UnitIsPartyLeader("player")) or RMS:IsMasterLooter()
+end
+
+-- read-only pot view for regular raiders: total + their share so far
+function M:OpenPotInfo()
+    local Skin = RMS.Skin
+    local C    = Skin.COLOR
+    local f = self.potInfoWin
+    if not f then
+        f = CreateFrame("Frame", "RaidMasterSuiteGDKPPotInfo", UIParent)
+        f:SetSize(300, 130)
+        f:SetPoint("CENTER")
+        f:SetFrameStrata("DIALOG")
+        f:EnableMouse(true); f:SetMovable(true); f:SetClampedToScreen(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", f.StartMoving)
+        f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+        Skin:SetBackdrop(f, C.bgMain, C.accent)
+        tinsert(UISpecialFrames, "RaidMasterSuiteGDKPPotInfo")
+
+        local title = f:CreateFontString(nil, "OVERLAY"); Skin:Font(title, 14, true)
+        title:SetTextColor(unpack(C.accent))
+        title:SetPoint("TOP", 0, -8); title:SetText("GDKP POT")
+
+        local close = Skin:CloseButton(f); close:SetPoint("TOPRIGHT", -4, -4)
+        close:SetScript("OnClick", function() f:Hide() end)
+
+        f.totalFs = f:CreateFontString(nil, "OVERLAY"); Skin:Font(f.totalFs, 13, true)
+        f.totalFs:SetTextColor(unpack(C.accent))
+        f.totalFs:SetPoint("TOP", 0, -36)
+
+        f.shareFs = f:CreateFontString(nil, "OVERLAY"); Skin:Font(f.shareFs, 12, false)
+        f.shareFs:SetTextColor(unpack(C.text))
+        f.shareFs:SetPoint("TOP", f.totalFs, "BOTTOM", 0, -8)
+
+        local note = f:CreateFontString(nil, "OVERLAY"); Skin:Font(note, 9, false)
+        note:SetTextColor(unpack(C.textDim))
+        note:SetPoint("BOTTOM", 0, 12); note:SetWidth(280)
+        note:SetText("Estimate before bonuses. Final payouts are announced by the leader.")
+
+        self.potInfoWin = f
+    end
+    f:Show()
+    self:RefreshPotInfo()
+end
+
+function M:RefreshPotInfo()
+    local f = self.potInfoWin
+    if not f or not f:IsShown() then return end
+    local total, n, share
+    if #self:PotSales() > 0 then
+        total, n = self:PotTotal(), #self:PotSales()
+        local _, _, per = self:PayoutNumbers()
+        share = per
+    elseif self._remotePot then
+        total, n, share = self._remotePot.total, self._remotePot.n, self._remotePot.share
+    else
+        total, n = 0, 0
+    end
+    f.totalFs:SetText(("Pot: %dg  (%d sale%s)"):format(total or 0, n or 0, n == 1 and "" or "s"))
+    f.shareFs:SetText(share and share > 0 and ("Your share so far: ~%dg"):format(share)
+                      or "Your share: |cff888888nothing sold yet|r")
+end
+
 function M:OpenPayout()
+    -- regular raiders only get the read-only pot summary
+    if not canManagePot() then self:OpenPotInfo() return end
     local Skin = RMS.Skin
     local C    = Skin.COLOR
 
@@ -1372,7 +1550,7 @@ function M:OpenPayout()
         local bonusLbl = f:CreateFontString(nil, "OVERLAY"); Skin:Font(bonusLbl, 11, true)
         bonusLbl:SetTextColor(unpack(C.accent))
         bonusLbl:SetPoint("TOPLEFT", 366, -34)
-        bonusLbl:SetText("Bonus players  |cff888888(click to toggle)|r")
+        bonusLbl:SetText("Players  |cff888888(click = bonus, budget/gold)|r")
 
         -- left: sales list
         local function buildSaleRow(parent)
@@ -1409,19 +1587,31 @@ function M:OpenPayout()
             local bg = r:CreateTexture(nil, "BACKGROUND"); bg:SetAllPoints(); bg:SetTexture(Skin.TEX_WHITE); r.bg = bg
             local hl = r:CreateTexture(nil, "BORDER"); hl:SetAllPoints(); hl:SetTexture(Skin.TEX_WHITE)
             hl:SetVertexColor(C.good[1], C.good[2], C.good[3], 0.20); hl:Hide(); r.hl = hl
-            local nameFs = r:CreateFontString(nil, "OVERLAY"); Skin:Font(nameFs, 11, false)
-            nameFs:SetPoint("LEFT", 6, 0); r.name = nameFs
             local tag = r:CreateFontString(nil, "OVERLAY"); Skin:Font(tag, 10, true)
             tag:SetPoint("RIGHT", -6, 0); tag:SetTextColor(unpack(C.good)); r.tag = tag
+            local bud = r:CreateFontString(nil, "OVERLAY"); Skin:Font(bud, 10, false)
+            bud:SetPoint("RIGHT", -50, 0); r.bud = bud
+            local nameFs = r:CreateFontString(nil, "OVERLAY"); Skin:Font(nameFs, 11, false)
+            nameFs:SetPoint("LEFT", 6, 0); nameFs:SetPoint("RIGHT", bud, "LEFT", -6, 0)
+            nameFs:SetJustifyH("LEFT"); nameFs:SetWordWrap(false); nameFs:SetNonSpaceWrap(false)
+            r.name = nameFs
             return r
         end
         local function updBonusRow(r, item, idx, alt)
             if not item then return end
             r.bg:SetVertexColor(alt and 0.10 or 0.13, alt and 0.10 or 0.13, alt and 0.12 or 0.15, 0.6)
             r.name:SetText(GB_CLASS_COLOR(item.class)..item.name.."|r")
+            -- budget/carried gold, whispered by addon users to leadership
+            local info = M._budgets and M._budgets[item.name]
+            if info then
+                r.bud:SetText(("|cffffd070%d|r/|cff60ff60%dg|r"):format(info.b or 0, info.g or 0))
+            else
+                r.bud:SetText("|cff777777no addon|r")
+            end
             local on = bonusFlags()[item.name]
             if on then r.hl:Show(); r.tag:SetText("BONUS") else r.hl:Hide(); r.tag:SetText("") end
             r:SetScript("OnClick", function()
+                if not canManagePot() then return end
                 local flags = bonusFlags()
                 flags[item.name] = (not flags[item.name]) and true or nil
                 M:RefreshPayout()
@@ -1503,6 +1693,14 @@ function M:OpenPayout()
     if n == 0 then n = GetNumPartyMembers() + 1 end
     if n > 1 and not f.countEdit:HasFocus() then f.countEdit:SetText(tostring(n)) end
 
+    -- budgets: seed our own, then ask addon users to whisper theirs
+    -- (only leader / assist / ML get replies)
+    self._budgets = { [RMS:PlayerName()] = {
+        b = (RMS.charDB and tonumber(RMS.charDB.gdkpBudget)) or 0,
+        g = math.floor(GetMoney() / 10000),
+    }}
+    if RMS:InGroup() then RMS.Comm:Send("goldbid", "budgetreq", {}) end
+
     f:Show()
     self:RefreshPayout()
 end
@@ -1512,7 +1710,11 @@ function M:PayoutNumbers()
     local total = self:PotTotal()
     local pct   = tonumber(RMS.db.goldbid.cutPercent) or 0
     local bpct  = tonumber(RMS.db.goldbid.bonusPercent) or 0
-    local n     = (self.payoutWin and tonumber(self.payoutWin.countEdit:GetText())) or 25
+    local n = self.payoutWin and tonumber(self.payoutWin.countEdit:GetText())
+    if not n then
+        n = GetNumRaidMembers()
+        if n == 0 then n = GetNumPartyMembers() + 1 end
+    end
     if n < 1 then n = 1 end
     local cut = math.floor(total * pct / 100)
     local afterCut = total - cut
