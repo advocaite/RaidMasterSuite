@@ -28,9 +28,14 @@ Config.DEFAULTS = {
         bidIncrement = 100,
         bidTimer     = 30,
         autoTradeDetect = true,
+        gdkpMode     = false,  -- pot tracking + Start Bid button in ML window
+        cutPercent   = 15,     -- organizer cut for the payout calculator
+        bonusPercent = 5,      -- performance-bonus pool, taken after the cut
+        chatBids     = true,   -- accept bids typed in raid/party chat
     },
     bis = {
         useStatWeights = false,
+        autoScanPopup  = true,  -- "who needs this" popup when loot opens
         -- phase: nil = newest available; set via the BiS tab phase buttons
     },
     plusone = {
@@ -187,6 +192,10 @@ function Config:BuildPanel(parent)
         if RMS.MinimapButton then RMS.MinimapButton:UpdateShown() end
     end
 
+    addSection(col1, "BiS Scan")
+    addCheck(col1, "Popup BiS needers on loot", "bis.autoScanPopup",
+        "When loot opens, pop the window listing who needs the drops for BiS. Untick to disable the automatic scan popup.")
+
     addSection(col1, "Soft Res")
     addCheck(col1, "Auto-accept reservations", "softres.autoAccept", "Automatically accept incoming SR submissions when raid leader.")
     addCheck(col1, "One item per player",      "softres.oneItemPerPlayer")
@@ -199,12 +208,25 @@ function Config:BuildPanel(parent)
     addNumber(col1, "Weekly decay (%)",      "dkp.decayPercent")
     addNumber(col1, "Officer rank index (<=)", "dkp_officerRank")
 
-    addSection(col1, "Gold Bid")
-    addNumber(col1, "Minimum bid (gold)",    "goldbid.minBid")
-    addNumber(col1, "Bid increment (gold)",  "goldbid.bidIncrement")
-    addNumber(col1, "Bid timer (seconds)",   "goldbid.bidTimer")
-    addCheck (col1, "Auto-detect trade payment", "goldbid.autoTradeDetect",
+    addSection(col2, "Gold Bid / GDKP")
+    addNumber(col2, "Minimum bid (gold)",    "goldbid.minBid")
+    addNumber(col2, "Bid increment (gold)",  "goldbid.bidIncrement")
+    addNumber(col2, "Bid timer (seconds)",   "goldbid.bidTimer")
+    addCheck (col2, "Auto-detect trade payment", "goldbid.autoTradeDetect",
         "Watch trade window for the winning bid amount and confirm award automatically.")
+    local gdkpCb = addCheck(col2, "Enable GDKP mode", "goldbid.gdkpMode",
+        "Track every sale into a raid pot and add a Start Bid button to the Master Loot window.")
+    local gdkpOrig = gdkpCb.OnValueChanged
+    gdkpCb.OnValueChanged = function(s, v)
+        gdkpOrig(s, v)
+        -- apply immediately to an open Master Loot window and the pot display
+        local ml = RMS:GetModule("masterloot")
+        if ml and ml.win and ml.win:IsShown() then ml:RefreshWindow() end
+        local gb = RMS:GetModule("goldbid")
+        if gb and gb.RefreshPot then gb:RefreshPot() end
+    end
+    addCheck (col2, "Accept bids typed in chat", "goldbid.chatBids",
+        "The host counts raid/party chat messages like '500' or 'bid 500' as bids -- works for raiders without the addon.")
 
     addSection(col2, "+1 Loot")
     addCheck(col2, "Auto +1 on roll wins", "plusone.autoRollWins",

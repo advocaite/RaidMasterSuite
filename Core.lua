@@ -8,7 +8,7 @@ local RMS = ns
 
 RMS.NAME    = "Raid Master Suite"
 RMS.SHORT   = "RMS"
-RMS.VERSION = "0.3.0"
+RMS.VERSION = "0.4.0"
 RMS.AUTHOR  = "rodneywowwow"
 
 -- Module registry. Modules call RMS:RegisterModule(id, tbl).

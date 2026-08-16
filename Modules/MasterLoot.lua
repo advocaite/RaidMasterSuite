@@ -104,12 +104,13 @@ local function scanLoot()
         -- coins have no item link, so the id check filters them even if
         -- LootSlotIsItem is unavailable
         if (not LootSlotIsItem) or LootSlotIsItem(slot) then
-            local icon, name, _, quality = GetLootSlotInfo(slot)
+            local icon, name, quantity, quality = GetLootSlotInfo(slot)
             local link = GetLootSlotLink(slot)
             local id   = link and tonumber(link:match("item:(%d+)"))
             if id and (quality or 0) >= threshold then
                 items[#items+1] = { slot = slot, id = id, link = link,
-                                    name = name, q = quality, icon = icon }
+                                    name = name, q = quality, icon = icon,
+                                    count = quantity or 1 }
             end
         end
     end
@@ -449,6 +450,17 @@ function M:BuildWindow()
     rollBtn:SetScript("OnMouseUp", function() M:CallRoll(selectedItem()) end)
     f.rollBtn = rollBtn
 
+    -- GDKP: auction the selected item (shown only when GDKP mode is on)
+    local bidBtn = Skin:Button(candCol, "Start Bid", 80, 20)
+    bidBtn:SetPoint("RIGHT", rollBtn, "LEFT", -4, 0)
+    bidBtn:SetScript("OnMouseUp", function()
+        local it = selectedItem()
+        if not it then return end
+        local gb = RMS:GetModule("goldbid")
+        if gb and gb.OpenStartDialog then gb:OpenStartDialog(it.link, it.count) end
+    end)
+    f.bidBtn = bidBtn
+
     local function buildCandRow(parent)
         local r = CreateFrame("Frame", nil, parent)
         r:SetHeight(24)
@@ -544,6 +556,12 @@ function M:RefreshWindow()
         f.rollBtn:SetText("Rolling...")
     else
         f.rollBtn:SetText(("Call Roll (%ds)"):format(rollTime()))
+    end
+
+    if RMS.db.goldbid and RMS.db.goldbid.gdkpMode then
+        f.bidBtn:Show()
+    else
+        f.bidBtn:Hide()
     end
 end
 

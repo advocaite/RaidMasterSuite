@@ -221,6 +221,8 @@ local function classDisplay(token)
 end
 
 local function onLootOpened()
+    -- user opt-out (GitHub issue: "disable the BiS scan popup")
+    if RMS.db.bis and RMS.db.bis.autoScanPopup == false then return end
     -- as master looter the Master Loot window already shows BiS tags per
     -- candidate; skip the duplicate needers popup
     if RMS:IsMasterLooter() and RMS.db.masterloot and RMS.db.masterloot.autoOpen ~= false then

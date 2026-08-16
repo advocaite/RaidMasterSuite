@@ -18,7 +18,7 @@ An all-in-one raid utility addon for **World of Warcraft 3.3.5a (WOTLK)**. Soft 
 | **Master Loot** | Auto-popup for the ML with every drop above the loot threshold; candidates show +1 / BiS / SR / HR tags; call rolls and hand out loot in one click. |
 | **Raid Comp** | Pick any WOTLK raid: typical GS ask, tank/healer/dps split, and a live buff & debuff coverage checklist vs your current group. |
 | **DKP**      | Per-guild standings, officer-managed award/deduct, presets, full audit log. GUILD-synced.   |
-| **Gold Bid** | Live auction window for an item. Trade-window auto-detect of payment. Persistent history.   |
+| **Gold Bid** | Full GDKP toolkit: live auctions with chat bidding (no addon needed to bid), per-item start price/increment, raid-wide pot tracking, cut & split payout calculator. |
 | **BiS Scan** | Detects each raider's class/spec, scans every loot drop, popup of who needs it. Per-phase BiS lists (Pre-Raid → ICC). |
 | **Advertise**| Compose recruitment messages and broadcast to selected chat channels on a timer.            |
 | **Settings** | All thresholds, defaults, and toggles (auto-open on login, etc.)                            |
@@ -94,7 +94,7 @@ That's it — no Ace, no LibStub, no required deps. The addon is fully self-cont
 ## Module guide
 
 ### Soft Res
-Players send their reservations to the raid via the addon channel. When the corresponding item drops and the raid does an open `/roll`, the addon collects rolls for ~8 seconds and announces the SR-weighted winner to RAID_WARNING (leader only). Reservations persist across reloads in `RaidMasterSuiteDB.softresState`. Late joiners auto-request the current session from the host.
+Players send their reservations to the raid via the addon channel. When the corresponding item drops and the raid does an open `/roll`, the addon collects rolls for ~8 seconds and announces the SR-weighted winner to RAID_WARNING (leader only). Reservations persist across reloads in `RaidMasterSuiteDB.softresState`. Late joiners auto-request the current session from the host. **Re-opening a closed session keeps all existing reserves** (e.g. to let a late joiner pick) — only **Reset** clears the list.
 
 ### Hard Res
 Leader pre-assigns specific items to specific players. When the master looter opens a corpse, the addon scans the loot vs. assignments and prints `HR [Item] -> PlayerName` so you know exactly who gets it. Picker integrated with the Loot DB (see below).
@@ -107,12 +107,14 @@ Leader pre-assigns specific items to specific players. When the master looter op
 - Full action log preserved (capped at 500 entries).
 - Late-join sync: officers respond to `syncreq` with chunked state pages.
 
-### Gold Bid
-- Master looter / raid leader pastes an item link, clicks **Start Bid**.
-- Raiders see an auto-popup with item, countdown, current high bid.
-- Configurable min bid, increment, and timer (in Settings).
+### Gold Bid / GDKP
+- Master looter / raid leader pastes an item link, sets **start price / increment / timer / stack per item** (defaults from Settings), clicks **Start Bid** — or uses the **Start Bid** button right in the Master Loot window (GDKP mode), which pre-fills the stack size from the loot slot.
+- **Stacks**: auctions display as `3x [Primordial Saronite]` and sell as one lot, or tick **Split stack into separate bids** to auto-run one auction per item, back to back.
+- Raiders see an auto-popup with item, countdown, current high bid — and the whole auction plays out in **raid chat** too: opening announcement, every new high bid, a 10s warning, and the winner.
+- **Chat bidding**: anyone can bid by typing `500` or `bid 500` in raid/party chat (or whispering the host) — no addon required. The host's client validates and syncs it to everyone.
 - After timer expires, host trades the winner. Addon watches `TRADE_MONEY_CHANGED` / `UI_INFO_MESSAGE` and auto-confirms when the offered gold matches.
 - If trade fails, host clicks **Next Bidder** → item is offered to runner-up.
+- **GDKP pot**: with GDKP mode on, every paid/awarded sale accumulates into a persistent pot (running total broadcast to the raid). The **Payout** window lists all sales, takes an organizer cut %, splits the rest evenly, and announces the per-raider payout to chat. Reset the pot at the start of each raid.
 - **Full History** browser: every past session saved (cap 200), with a **By Item** view showing avg / max / min sale price.
 
 ### +1 Loot

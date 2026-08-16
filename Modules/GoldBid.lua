@@ -30,6 +30,7 @@ local function snapshot(sess)
     local out = {
         id       = sess.id,    host = sess.host,
         itemID   = sess.itemID, link = sess.link, name = sess.name,
+        count    = sess.count,
         minBid   = sess.minBid, inc  = sess.inc,  duration = sess.duration,
         status   = sess.status, paid = sess.paid,
         finishedAt = time(),
@@ -46,7 +47,53 @@ function M:OnInit()
     RMS.db.goldbid          = RMS.db.goldbid or {}
     RMS.db.goldbid.history  = RMS.db.goldbid.history or {}
     RMS.db.goldbid.historyCap = RMS.db.goldbid.historyCap or HISTORY_CAP_DEFAULT
+    RMS.db.goldbid.pot      = RMS.db.goldbid.pot or { sales = {}, startedAt = time() }
     self.history = RMS.db.goldbid.history
+end
+
+-- host-side chat line to the whole group (works for raiders without the addon)
+local function chatAnnounce(msg)
+    if not RMS:InGroup() then RMS:Print(msg) return end
+    SendChatMessage(msg, RMS:InRaid() and "RAID" or "PARTY")
+end
+
+-- "3x [Primordial Saronite]" for stacks, plain link otherwise
+local function sessItemText(s)
+    local base = s.link or s.name or "?"
+    local c = tonumber(s.count) or 1
+    return (c > 1) and (c.."x "..base) or base
+end
+
+-- ---------- GDKP pot ----------
+function M:PotSales() return (RMS.db.goldbid.pot and RMS.db.goldbid.pot.sales) or {} end
+
+function M:PotTotal()
+    local t = 0
+    for _, s in ipairs(self:PotSales()) do t = t + (s.amount or 0) end
+    return t
+end
+
+function M:_RecordSale(sess)
+    if not RMS.db.goldbid.gdkpMode then return end
+    if not isHost() then return end
+    if sess._potRecorded then return end
+    if not (sess.winner and sess.awardingTo) then return end
+    sess._potRecorded = true
+    table.insert(RMS.db.goldbid.pot.sales, {
+        itemID = sess.itemID, link = sess.link, name = sess.name,
+        count = sess.count,
+        player = sess.awardingTo, amount = sess.winner.amount, at = time(),
+    })
+    broadcast("pot", { total = self:PotTotal(), n = #self:PotSales() })
+    self:RefreshPot()
+end
+
+function M:ResetPot()
+    RMS.db.goldbid.pot = { sales = {}, bonus = {}, startedAt = time() }
+    self._remotePot = nil
+    broadcast("pot", { total = 0, n = 0 })
+    RMS:Print("GDKP pot reset.")
+    self:RefreshPot()
 end
 
 -- ---------- session lifecycle ----------
@@ -65,12 +112,15 @@ function M:Start(itemLink, opts)
 
     local cfg = RMS.db.goldbid
     opts = opts or {}
+    local count = tonumber(opts.count) or 1
+    if count < 1 then count = 1 end
     local sess = {
         id       = newSessionId(),
         host     = RMS:PlayerName(),
         itemID   = itemID,
         link     = itemLink,
         name     = name,
+        count    = count,
         minBid   = opts.minBid   or cfg.minBid,
         inc      = opts.inc      or cfg.bidIncrement,
         duration = opts.duration or cfg.bidTimer,
@@ -79,11 +129,38 @@ function M:Start(itemLink, opts)
         status   = "open",
     }
     self.session = sess
-    broadcast("start", {
+    local payload = {
         id = sess.id, host = sess.host, item = sess.itemID, link = sess.link, name = sess.name,
-        min = sess.minBid, inc = sess.inc, dur = sess.duration,
-    })
-    RMS:Print("Bid OPEN for %s -- min %dg, %ds.", sess.link, sess.minBid, sess.duration)
+        min = sess.minBid, inc = sess.inc, dur = sess.duration, cnt = sess.count,
+    }
+    -- addon messages cap at ~254 bytes and silently vanish over that; the
+    -- comm-escaped item link is the fat part, so drop it when the message
+    -- would be oversized -- receivers rebuild the link from the item id
+    if #("goldbid:start:"..RMS.Comm:Encode(payload)) > 230 then
+        payload.link, payload.name = nil, nil
+    end
+    broadcast("start", payload)
+    -- some servers (Warmane included) drop addon-channel bursts; nudge a
+    -- compact copy 2s later -- receivers that already have it ignore it
+    local nudge = CreateFrame("Frame"); local nt = 0
+    nudge:SetScript("OnUpdate", function(s, dt)
+        nt = nt + dt
+        if nt > 2 then
+            s:SetScript("OnUpdate", nil)
+            if self.session == sess and sess.status == "open" then
+                local hi = self:Highest()
+                broadcast("start", {
+                    id = sess.id, host = sess.host, item = sess.itemID,
+                    min = sess.minBid, inc = sess.inc, cnt = sess.count,
+                    dur = math.max(1, math.floor(sess.deadline - GetTime())),
+                    hp = hi and hi.player, ha = hi and hi.amount,
+                })
+            end
+        end
+    end)
+    RMS:Print("Bid OPEN for %s -- min %dg, %ds.", sessItemText(sess), sess.minBid, sess.duration)
+    chatAnnounce(("[RMS] Bidding OPEN: %s -- min %dg, +%dg steps, %ds. Type your bid in chat (e.g. %d) or use the popup."):format(
+        sessItemText(sess), sess.minBid, sess.inc, sess.duration, sess.minBid))
     self:Refresh(); self:ShowPopup()
 end
 
@@ -93,6 +170,10 @@ function M:Cancel()
     broadcast("cancel", { id = self.session.id })
     self.session.status = "cancelled"
     RMS:Print("Bid CANCELLED.")
+    if self._queue and #self._queue > 0 then
+        RMS:Print("Cleared %d queued auction(s).", #self._queue)
+        self._queue = {}
+    end
     self:ArchiveSession(); self:Refresh()
 end
 
@@ -141,6 +222,33 @@ function M:_ApplyBid(sessionId, player, amount)
     if not sess or sess.id ~= sessionId or sess.status ~= "open" then return end
     table.insert(sess.bids, { player = player, amount = amount, t = GetTime() })
     self:Refresh()
+    -- host narrates each new high bid to chat so everyone can follow along
+    if isHost() then
+        local hi = self:Highest()
+        if hi and sess._lastAnnounced ~= hi.amount then
+            sess._lastAnnounced = hi.amount
+            chatAnnounce(("[RMS] %s: %dg by %s (next bid %dg+)"):format(
+                sessItemText(sess), hi.amount, hi.player, hi.amount + sess.inc))
+        end
+    end
+end
+
+-- ---------- chat bidding (host ingests, validates, rebroadcasts) ----------
+-- lets raiders WITHOUT the addon bid by typing "500" or "bid 500" in chat
+local function onChatBid(msg, sender)
+    if not RMS.db.goldbid.chatBids then return end
+    local sess = M.session
+    if not sess or sess.status ~= "open" or not isHost() then return end
+    if not sender or sender == "" then return end
+    local m = (msg or ""):lower():gsub(",", "")
+    local amt = m:match("^%s*bid%s+(%d+)%s*g?%s*$") or m:match("^%s*(%d+)%s*g?%s*$")
+    amt = tonumber(amt)
+    if not amt then return end
+    if amt < sess.minBid then return end
+    local hi = M:Highest()
+    if hi and amt < (hi.amount + sess.inc) then return end
+    broadcast("cbid", { id = sess.id, p = sender, a = amt })
+    M:_ApplyBid(sess.id, sender, amt)
 end
 
 function M:Highest()
@@ -179,9 +287,9 @@ function M:_EndSession()
 
     local ranked = self:RankedBidders()
     if #ranked == 0 then
-        RMS:Print("Bid for %s ended -- NO BIDS.", sess.link)
+        RMS:Print("Bid for %s ended -- NO BIDS.", sessItemText(sess))
         if isHost() and RMS:InRaid() then
-            SendChatMessage(("[RMS] %s -- no bids."):format(sess.link), "RAID")
+            SendChatMessage(("[RMS] %s -- no bids."):format(sessItemText(sess)), "RAID")
         end
         self:ArchiveSession(); self:Refresh(); return
     end
@@ -195,7 +303,7 @@ function M:_EndSession()
         if RMS:InRaid() then
             SendChatMessage(
                 ("[RMS] %s -- WINNER: %s for %dg. Trade %s now."):format(
-                    sess.link, sess.winner.player, sess.winner.amount, RMS:PlayerName()),
+                    sessItemText(sess), sess.winner.player, sess.winner.amount, RMS:PlayerName()),
                 "RAID_WARNING")
         end
         broadcast("winner", { id = sess.id, p = sess.winner.player, a = sess.winner.amount })
@@ -246,6 +354,7 @@ function M:MarkPaid()
     sess.paid   = true
     broadcast("paid", { id = sess.id, p = sess.awardingTo })
     RMS:Print("Payment received from %s. Trade them %s now.", sess.awardingTo, sess.link)
+    self:_RecordSale(sess)
     self:Refresh()
 end
 
@@ -256,6 +365,7 @@ function M:MarkAwarded()
     sess.status = "awarded"
     broadcast("award", { id = sess.id, p = sess.awardingTo })
     RMS:Print("Awarded %s to %s.", sess.link, sess.awardingTo)
+    self:_RecordSale(sess)
     self:ArchiveSession(); self:Refresh()
 end
 
@@ -279,33 +389,134 @@ function M:ArchiveSession()
             s:SetScript("OnUpdate", nil)
             M:Refresh()
             if M.popup then M.popup:Hide() end
+            M:_StartNextQueued()
         end
     end)
 end
 
+-- split-stack queue: fire the next single-item auction once the previous
+-- session has fully cleared
+function M:_StartNextQueued()
+    if not self._queue or #self._queue == 0 then return end
+    if self.session then return end
+    local nextUp = table.remove(self._queue, 1)
+    RMS:Print("Starting queued auction (%d left after this one).", #self._queue)
+    self:Start(nextUp.link, nextUp.opts)
+end
+
 -- ---------- comm handlers ----------
+-- ask the host to resend a session we somehow missed (dropped start message,
+-- late join, reload mid-auction). Throttled per session id.
+local function requestSession(id, hostName)
+    if not id then return end
+    M._sessReq = M._sessReq or {}
+    local now = GetTime()
+    if M._sessReq[id] and (now - M._sessReq[id]) < 10 then return end
+    M._sessReq[id] = now
+    if hostName and hostName ~= RMS:PlayerName() then
+        RMS.Comm:SendWhisper("goldbid", "sessreq", { id = id }, hostName)
+    else
+        RMS.Comm:Send("goldbid", "sessreq", { id = id })
+    end
+end
+
 RMS.Comm:On("goldbid", "start", function(p, sender)
-    if M.session and M.session.status == "open" then return end -- already in one
+    if M.session and M.session.status == "open"
+       and GetTime() < (M.session.deadline or 0) + 30 then
+        return -- already in a live one
+    end
+    local itemID = tonumber(p.item)
+    local link, name = p.link, p.name
+    if (not link or link == "") and itemID then
+        local n, l = GetItemInfo(itemID)
+        name = name or n
+        link = l or ("item:"..itemID)
+    end
     local dur = tonumber(p.dur) or 30
     M.session = {
         id = p.id, host = p.host or sender,
-        itemID = tonumber(p.item), link = p.link, name = p.name,
+        itemID = itemID, link = link, name = name or link,
+        count = tonumber(p.cnt) or 1,
         minBid = tonumber(p.min) or 0, inc = tonumber(p.inc) or 100,
         duration = dur, deadline = GetTime() + dur,
         bids = {}, status = "open",
     }
+    -- resynced sessions carry the current high bid so the popup is accurate
+    if p.hp and p.ha then
+        table.insert(M.session.bids, { player = p.hp, amount = tonumber(p.ha) or 0, t = GetTime() })
+    end
+    -- uncached item: warm the cache and repaint once the real link resolves
+    if itemID and not GetItemInfo(itemID) then
+        if not RMS._itemQueryTip then
+            RMS._itemQueryTip = CreateFrame("GameTooltip", "RMSItemQueryTip", UIParent, "GameTooltipTemplate")
+        end
+        RMS._itemQueryTip:SetOwner(UIParent, "ANCHOR_NONE")
+        RMS._itemQueryTip:SetHyperlink("item:"..itemID)
+        local fr = CreateFrame("Frame"); local t = 0
+        fr:SetScript("OnUpdate", function(s, dt)
+            t = t + dt
+            if t > 1 then
+                s:SetScript("OnUpdate", nil)
+                local n2, l2 = GetItemInfo(itemID)
+                if l2 and M.session and M.session.id == p.id then
+                    M.session.link, M.session.name = l2, n2
+                    M:Refresh(); M:RefreshPopup()
+                end
+            end
+        end)
+    end
     RMS:Print("Bid OPENED by %s for %s.", M.session.host, M.session.link)
     M:Refresh(); M:ShowPopup()
 end)
 
+-- host answers a resync request with a compact start (remaining time + high)
+-- p.id == "any" means "whatever auction you're running" (chat-beacon path)
+RMS.Comm:On("goldbid", "sessreq", function(p, sender)
+    local sess = M.session
+    if not sess or not isHost() or sess.status ~= "open" then return end
+    if sess.id ~= p.id and p.id ~= "any" then return end
+    if sender == RMS:PlayerName() then return end
+    local hi = M:Highest()
+    RMS.Comm:SendWhisper("goldbid", "start", {
+        id = sess.id, host = sess.host, item = sess.itemID,
+        min = sess.minBid, inc = sess.inc, cnt = sess.count,
+        dur = math.max(1, math.floor(sess.deadline - GetTime())),
+        hp = hi and hi.player, ha = hi and hi.amount,
+    }, sender)
+end)
+
 RMS.Comm:On("goldbid", "bid", function(p, sender)
-    if not M.session or M.session.id ~= p.id then return end
+    if not M.session or M.session.id ~= p.id then
+        requestSession(p.id)  -- bid for a session we missed: fetch it
+        return
+    end
     if (p.p or sender) ~= sender then return end -- prevent forging
     M:_ApplyBid(p.id, p.p or sender, tonumber(p.a))
 end)
 
+-- chat bid relayed by the host (host already validated it)
+RMS.Comm:On("goldbid", "cbid", function(p, sender)
+    if not M.session or M.session.id ~= p.id then
+        requestSession(p.id, sender)  -- sender IS the host here
+        return
+    end
+    if M.session.host ~= sender then return end
+    if not p.p then return end
+    M:_ApplyBid(p.id, p.p, tonumber(p.a))
+end)
+
+-- pot total pushed by the host so everyone sees the running GDKP pot
+RMS.Comm:On("goldbid", "pot", function(p, sender)
+    if sender == RMS:PlayerName() then return end
+    M._remotePot = { total = tonumber(p.total) or 0, n = tonumber(p.n) or 0, host = sender }
+    M:RefreshPot()
+end)
+
 RMS.Comm:On("goldbid", "extend", function(p, sender)
-    if not M.session or M.session.id ~= p.id then return end
+    if not M.session or M.session.id ~= p.id then
+        requestSession(p.id, sender)
+        return
+    end
     if M.session.host ~= sender then return end
     local sec = tonumber(p.sec) or 15
     M.session.deadline = M.session.deadline + sec
@@ -406,6 +617,19 @@ local function onTradeClosed()
     trade.partner = nil; trade.theirCopper = 0
 end
 
+-- Group chat does double duty: the host reads typed bids from it, and
+-- everyone else treats the host's "[RMS] Bidding OPEN" announcement as a
+-- session beacon -- chat is delivered reliably even on servers that drop
+-- addon-channel messages, so this guarantees the popup appears on start.
+local function onGroupChat(msg, sender)
+    if msg and msg:find("^%[RMS%] Bidding OPEN") and sender ~= RMS:PlayerName() then
+        if not (M.session and M.session.status == "open") then
+            requestSession("any", sender)
+        end
+    end
+    onChatBid(msg, sender)
+end
+
 M.events = {
     TRADE_SHOW           = function(self) onTradeShow() end,
     TRADE_MONEY_CHANGED  = function(self) onTradeMoneyChanged() end,
@@ -413,6 +637,12 @@ M.events = {
     UI_INFO_MESSAGE      = function(self, _, msg) onUiInfoMessage(_, msg) end,
     TRADE_CLOSED         = function(self) onTradeClosed() end,
     TRADE_REQUEST_CANCEL = function(self) onTradeClosed() end,
+    -- chat bidding + session beacon (see onGroupChat)
+    CHAT_MSG_RAID          = function(self, _, msg, sender) onGroupChat(msg, sender) end,
+    CHAT_MSG_RAID_LEADER   = function(self, _, msg, sender) onGroupChat(msg, sender) end,
+    CHAT_MSG_PARTY         = function(self, _, msg, sender) onGroupChat(msg, sender) end,
+    CHAT_MSG_PARTY_LEADER  = function(self, _, msg, sender) onGroupChat(msg, sender) end,
+    CHAT_MSG_WHISPER       = function(self, _, msg, sender) onChatBid(msg, sender) end,
 }
 
 -- ---------- timer driver ----------
@@ -420,6 +650,14 @@ local timer = CreateFrame("Frame")
 timer:SetScript("OnUpdate", function()
     local sess = M.session
     if not sess or sess.status ~= "open" then return end
+    -- one "10s left" chat nudge for the non-addon bidders
+    local rem = sess.deadline - GetTime()
+    if isHost() and not sess._warn10 and rem <= 10 and rem > 0 then
+        sess._warn10 = true
+        local hi = M:Highest()
+        chatAnnounce(("[RMS] 10s left on %s! %s"):format(sessItemText(sess),
+            hi and ("Current: %dg by %s."):format(hi.amount, hi.player) or "No bids yet."))
+    end
     if GetTime() >= sess.deadline then
         if isHost() then M:_EndSession() end
         -- non-host clients also flip status when time elapses; host's "winner" msg
@@ -460,7 +698,7 @@ function M:BuildUI(parent)
     Skin:Font(hostLabel, 11, false)
     hostLabel:SetTextColor(unpack(C.textDim))
     hostLabel:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -8)
-    hostLabel:SetText("Host: paste an item link, then Start (uses defaults from Settings):")
+    hostLabel:SetText("Host: paste an item link, set the prices, then Start:")
 
     local linkEdit = Skin:EditBox(panel, 380, 22)
     linkEdit:SetPoint("TOPLEFT", hostLabel, "BOTTOMLEFT", 0, -4)
@@ -468,17 +706,47 @@ function M:BuildUI(parent)
         if linkEdit:HasFocus() then linkEdit:SetText(text); return true end
     end)
 
-    -- Toolbar row 2: action buttons (kept inside the 380w left column)
-    local startBtn  = Skin:Button(panel, "Start Bid", 88, 22)
-    startBtn:SetPoint("TOPLEFT", linkEdit, "BOTTOMLEFT", 0, -6)
+    -- Toolbar row 2: per-auction start price / increment / timer / stack + Start
+    local function priceEdit(label, anchor, w, default)
+        local e = Skin:EditBox(panel, w, 22)
+        if anchor then e:SetPoint("LEFT", anchor, "RIGHT", 8, 0)
+        else e:SetPoint("TOPLEFT", linkEdit, "BOTTOMLEFT", 0, -20) end
+        e:SetNumeric(true)
+        e:SetText(tostring(default or 0))
+        -- make sure clicks always land: sit above siblings and force focus
+        e:SetFrameLevel(panel:GetFrameLevel() + 5)
+        e:SetScript("OnMouseDown", function(s) s:SetFocus() end)
+        local lbl = panel:CreateFontString(nil, "OVERLAY")
+        Skin:Font(lbl, 9, false)
+        lbl:SetTextColor(unpack(C.textDim))
+        lbl:SetPoint("BOTTOMLEFT", e, "TOPLEFT", 2, 2)
+        lbl:SetText(label)
+        return e
+    end
+    local cfgGB    = RMS.db.goldbid
+    local minEdit  = priceEdit("Start (g)",  nil,      62, cfgGB.minBid)
+    local incEdit  = priceEdit("+Inc",       minEdit,  54, cfgGB.bidIncrement)
+    local durEdit  = priceEdit("Sec",        incEdit,  44, cfgGB.bidTimer)
+    local stackEdit = priceEdit("Stack",     durEdit,  40, 1)
+
+    local startBtn  = Skin:Button(panel, "Start Bid", 84, 22)
+    startBtn:SetPoint("LEFT", stackEdit, "RIGHT", 10, 0)
     startBtn:SetScript("OnMouseUp", function()
         local link = linkEdit:GetText():match("(|c%x+|Hitem:.-|h.-|h|r)")
         if not link then RMS:Print("Paste a real item link first.") return end
-        self:Start(link); linkEdit:SetText("")
+        self:Start(link, {
+            minBid   = tonumber(minEdit:GetText()),
+            inc      = tonumber(incEdit:GetText()),
+            duration = tonumber(durEdit:GetText()),
+            count    = tonumber(stackEdit:GetText()),
+        })
+        linkEdit:SetText("")
+        stackEdit:SetText("1")
     end)
 
+    -- Toolbar row 3: session control buttons
     local cancelBtn = Skin:Button(panel, "Cancel", 70, 22)
-    cancelBtn:SetPoint("LEFT", startBtn, "RIGHT", 6, 0)
+    cancelBtn:SetPoint("TOPLEFT", minEdit, "BOTTOMLEFT", 0, -6)
     cancelBtn:SetScript("OnMouseUp", function() self:Cancel() end)
 
     local closeBtn = Skin:Button(panel, "Close Now", 88, 22)
@@ -489,9 +757,29 @@ function M:BuildUI(parent)
     extendBtn:SetPoint("LEFT", closeBtn, "RIGHT", 6, 0)
     extendBtn:SetScript("OnMouseUp", function() self:Extend(15) end)
 
+    -- GDKP toggle, right where you run the auctions
+    local gdkpCb = Skin:CheckBox(panel, "GDKP mode")
+    gdkpCb:SetWidth(100)
+    gdkpCb:SetPoint("LEFT", extendBtn, "RIGHT", 12, 0)
+    gdkpCb:SetChecked(RMS.db.goldbid.gdkpMode)
+    gdkpCb.OnValueChanged = function(_, v)
+        RMS.db.goldbid.gdkpMode = v and true or false
+        local ml = RMS:GetModule("masterloot")
+        if ml and ml.win and ml.win:IsShown() then ml:RefreshWindow() end
+        self:RefreshPot()
+    end
+    Skin:AttachTooltip(gdkpCb.box, "GDKP mode",
+        { "Track every sale into the raid pot and add a Start Bid button to the Master Loot window. Same setting as in the Settings tab." })
+
+    -- re-read shared settings when the tab is shown
+    panel:SetScript("OnShow", function()
+        gdkpCb:SetChecked(RMS.db.goldbid.gdkpMode)
+        self:Refresh()
+    end)
+
     -- Active session panel
     local actHdr = Skin:Header(panel, "Active Session")
-    actHdr:SetPoint("TOPLEFT", startBtn, "BOTTOMLEFT", 0, -12)
+    actHdr:SetPoint("TOPLEFT", cancelBtn, "BOTTOMLEFT", 0, -12)
     actHdr:SetWidth(380)
 
     local actBody = Skin:Panel(panel)
@@ -585,9 +873,25 @@ function M:BuildUI(parent)
     bidsList:SetPoint("BOTTOM", panel, "BOTTOM", 0, 8)
     bidsList:SetWidth(380)
 
+    -- GDKP pot summary (right column, above results)
+    local potHdr = Skin:Header(panel, "GDKP Pot")
+    potHdr:SetPoint("TOPLEFT", actHdr, "TOPRIGHT", 8, 0)
+    potHdr:SetPoint("RIGHT", panel, "RIGHT", -8, 0)
+
+    local payoutBtn = Skin:Button(potHdr, "Payout", 70, 20)
+    payoutBtn:SetPoint("RIGHT", -4, 0)
+    payoutBtn:SetScript("OnMouseUp", function() M:OpenPayout() end)
+    Skin:AttachTooltip(payoutBtn, "GDKP Payout",
+        {"Sales list, organizer cut and per-raider split calculator, announce to raid."})
+
+    local potFs = potHdr:CreateFontString(nil, "OVERLAY")
+    Skin:Font(potFs, 12, true)
+    potFs:SetTextColor(unpack(C.accent))
+    potFs:SetPoint("RIGHT", payoutBtn, "LEFT", -10, 0)
+
     -- recent results column (right)
     local logHdr = Skin:Header(panel, "Recent Results")
-    logHdr:SetPoint("TOPLEFT", actHdr, "TOPRIGHT", 8, 0)
+    logHdr:SetPoint("TOPLEFT", potHdr, "BOTTOMLEFT", 0, -6)
     logHdr:SetPoint("RIGHT", panel, "RIGHT", -8, 0)
 
     local fullHistBtn = Skin:Button(logHdr, "Full History", 90, 22)
@@ -623,7 +927,7 @@ function M:BuildUI(parent)
     local function updateLogRow(r, item, idx, alt)
         if not item then return end
         r.bg:SetVertexColor(alt and 0.10 or 0.13, alt and 0.10 or 0.13, alt and 0.12 or 0.15, 0.6)
-        r.item:SetText(item.link or item.name or "?")
+        r.item:SetText(sessItemText(item))
         local badges = {}
         if item.status == "awarded"   then table.insert(badges, fmtBadge("WON",       C.good)) end
         if item.paid                  then table.insert(badges, fmtBadge("PAID",      C.good)) end
@@ -643,17 +947,37 @@ function M:BuildUI(parent)
     self._ui = {
         panel = panel, status = status,
         startBtn = startBtn, cancelBtn = cancelBtn, closeBtn = closeBtn, extendBtn = extendBtn,
-        linkEdit = linkEdit,
+        linkEdit = linkEdit, minEdit = minEdit, incEdit = incEdit, durEdit = durEdit,
         actBody = actBody, itemFs = itemFs, timerFs = timerFs, highFs = highFs,
         bidEdit = bidEdit, bidBtn = bidBtn, incBtn = incBtn, minBtn = minBtn,
         paidBtn = paidBtn, awardBtn = awardBtn, nextBtn = nextBtn,
-        bidsList = bidsList, logList = logList,
+        bidsList = bidsList, logList = logList, potFs = potFs,
     }
     self:Refresh()
     return panel
 end
 
+function M:RefreshPot()
+    if self._ui and self._ui.potFs then
+        local txt
+        if #self:PotSales() > 0 then
+            txt = ("%dg  (%d sales)"):format(self:PotTotal(), #self:PotSales())
+        elseif self._remotePot and self._remotePot.n > 0 then
+            txt = ("%dg  (%d sales @ %s)"):format(self._remotePot.total, self._remotePot.n, self._remotePot.host)
+        else
+            txt = RMS.db.goldbid.gdkpMode and "0g" or "|cff888888GDKP mode off|r"
+        end
+        self._ui.potFs:SetText(txt)
+    end
+    if self.payoutWin and self.payoutWin:IsShown() then self:RefreshPayout() end
+end
+
 function M:RefreshTimerOnly()
+    -- popup first: it must keep ticking even if this client never opened
+    -- the Gold Bid tab (self._ui only exists once the tab is built)
+    if self.popup and self.popup:IsShown() then
+        self:RefreshPopup()
+    end
     if not (self._ui and self.session) then return end
     if self.session.status == "open" then
         local rem = math.max(0, self.session.deadline - GetTime())
@@ -661,12 +985,11 @@ function M:RefreshTimerOnly()
         if rem <= 5 then self._ui.timerFs:SetTextColor(unpack(RMS.Skin.COLOR.bad))
         else            self._ui.timerFs:SetTextColor(unpack(RMS.Skin.COLOR.accent)) end
     end
-    if self.popup and self.popup:IsShown() then
-        self:RefreshPopup()
-    end
 end
 
 function M:Refresh()
+    -- popup repaints on every bid/state change, tab or no tab
+    if self.popup and self.popup:IsShown() then self:RefreshPopup() end
     if not self._ui then return end
     local C = RMS.Skin.COLOR
     local sess = self.session
@@ -700,7 +1023,7 @@ function M:Refresh()
 
     -- active session body
     if sess then
-        self._ui.itemFs:SetText(sess.link or sess.name or "?")
+        self._ui.itemFs:SetText(sessItemText(sess))
         local hi = self:Highest()
         if hi then
             self._ui.highFs:SetText(("High: %s -- %dg  (min %dg, +%dg)"):format(hi.player, hi.amount, sess.minBid, sess.inc))
@@ -739,6 +1062,7 @@ function M:Refresh()
     end
 
     self._ui.logList:SetData(self.history)
+    self:RefreshPot()
 end
 
 -- ---------- popup window (auto-shown to bidders) ----------
@@ -799,12 +1123,31 @@ function M:BuildPopup()
         edit:SetText(tostring(nx))
     end)
 
+    -- all-in: bid every gold piece you're carrying
+    local allin = Skin:Button(f, "All In", 56, 22)
+    allin:SetPoint("LEFT", inc, "RIGHT", 4, 0)
+    allin:SetScript("OnMouseUp", function()
+        local sess = M.session
+        if not sess or sess.status ~= "open" then return end
+        local gold = math.floor(GetMoney() / 10000)
+        local hi = M:Highest()
+        local needed = math.max(sess.minBid, hi and (hi.amount + sess.inc) or sess.minBid)
+        if gold < needed then
+            RMS:Print("All-in would be %dg but the bid needs at least %dg.", gold, needed)
+            return
+        end
+        M:PlaceBid(gold)
+    end)
+    Skin:AttachTooltip(allin, "All In",
+        {"Bid all the gold in your bags (must beat the current bid + increment)."})
+
     local close = Skin:Button(f, "x", 22, 22)
     close:SetPoint("TOPRIGHT", -4, -4)
     close.text:SetTextColor(unpack(C.bad))
     close:SetScript("OnMouseUp", function() f:Hide() end)
 
     f.title, f.item, f.timer, f.high, f.edit = title, item, timer, high, edit
+    f.bidBtn, f.incBtn, f.allBtn = bid, inc, allin
     self.popup = f
     return f
 end
@@ -819,7 +1162,19 @@ function M:RefreshPopup()
     local f = self.popup; if not f then return end
     local sess = self.session
     if not sess then f:Hide(); return end
-    f.item:SetText(sess.link or sess.name or "?")
+    f.item:SetText(sessItemText(sess))
+
+    -- bid controls only exist while the auction is live
+    local function bidControls(shown)
+        if shown then
+            f.edit:Show(); f.bidBtn:Show(); f.incBtn:Show(); f.allBtn:Show()
+            f.edit:Enable()
+        else
+            f.edit:ClearFocus()
+            f.edit:Hide(); f.bidBtn:Hide(); f.incBtn:Hide(); f.allBtn:Hide()
+        end
+    end
+
     if sess.status == "open" then
         local rem = math.max(0, sess.deadline - GetTime())
         f.timer:SetText(string.format("%0.1fs", rem))
@@ -827,18 +1182,366 @@ function M:RefreshPopup()
         local hi = M:Highest()
         f.high:SetText(hi and (("High: %s -- %dg"):format(hi.player, hi.amount))
                           or ("Min %dg, +%dg"):format(sess.minBid, sess.inc))
-        f.edit:Enable()
+        bidControls(true)
     elseif sess.status == "awaiting_pay" then
         f.timer:SetText("WINNER")
         f.timer:SetTextColor(unpack(RMS.Skin.COLOR.warn))
         local w = sess.winner
         f.high:SetText(w and (("%s -- %dg -- trade %s"):format(w.player, w.amount, sess.host)) or "")
-        f.edit:Disable()
+        bidControls(false)
     else
         f.high:SetText(sess.status:upper())
         f.timer:SetText("")
-        f.edit:Disable()
+        bidControls(false)
     end
+end
+
+-- ====================================================================
+-- Start dialog (used by the Master Loot window's Start Bid button)
+-- ====================================================================
+function M:OpenStartDialog(itemLink, stackCount)
+    if not itemLink then return end
+    local Skin = RMS.Skin
+    local C    = Skin.COLOR
+
+    local f = self.startDlg
+    if not f then
+        f = CreateFrame("Frame", "RaidMasterSuiteBidStart", UIParent)
+        f:SetSize(380, 178)
+        f:SetPoint("CENTER", 0, 120)
+        f:SetFrameStrata("FULLSCREEN_DIALOG")
+        f:EnableMouse(true); f:SetMovable(true); f:SetClampedToScreen(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", f.StartMoving)
+        f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+        Skin:SetBackdrop(f, C.bgMain, C.accent)
+        tinsert(UISpecialFrames, "RaidMasterSuiteBidStart")
+
+        local title = f:CreateFontString(nil, "OVERLAY"); Skin:Font(title, 13, true)
+        title:SetTextColor(unpack(C.accent))
+        title:SetPoint("TOP", 0, -8); title:SetText("START GOLD BID")
+
+        local item = f:CreateFontString(nil, "OVERLAY"); Skin:Font(item, 12, true)
+        item:SetPoint("TOP", title, "BOTTOM", 0, -6)
+        item:SetWidth(360); item:SetJustifyH("CENTER")
+        item:SetWordWrap(false); item:SetNonSpaceWrap(false)
+        f.itemFs = item
+
+        local function dlgEdit(label, x, w)
+            local e = Skin:EditBox(f, w, 22)
+            e:SetPoint("TOPLEFT", x, -80)
+            e:SetNumeric(true)
+            -- clicks must always land: above the draggable dialog, forced focus
+            e:SetFrameLevel(f:GetFrameLevel() + 5)
+            e:SetScript("OnMouseDown", function(s) s:SetFocus() end)
+            local lbl = f:CreateFontString(nil, "OVERLAY"); Skin:Font(lbl, 9, false)
+            lbl:SetTextColor(unpack(C.textDim))
+            lbl:SetPoint("BOTTOMLEFT", e, "TOPLEFT", 2, 2)
+            lbl:SetText(label)
+            return e
+        end
+        f.minEdit   = dlgEdit("Start price (g)", 14,  80)
+        f.incEdit   = dlgEdit("+Increment",      108, 76)
+        f.durEdit   = dlgEdit("Seconds",         198, 66)
+        f.stackEdit = dlgEdit("Stack",           278, 56)
+
+        -- auction each item of the stack separately, one after another
+        f.splitCb = Skin:CheckBox(f, "Split stack into separate bids")
+        f.splitCb:SetWidth(240)
+        f.splitCb:SetPoint("TOPLEFT", 14, -112)
+        Skin:AttachTooltip(f.splitCb.box, "Split stack",
+            {"Runs one auction per item in the stack, back to back. The next one auto-starts a few seconds after each winner is settled."})
+
+        local go = Skin:Button(f, "Start Bid", 100, 24)
+        go:SetPoint("BOTTOMLEFT", 14, 10)
+        go:SetScript("OnMouseUp", function()
+            local cnt = tonumber(f.stackEdit:GetText()) or 1
+            local base = {
+                minBid   = tonumber(f.minEdit:GetText()),
+                inc      = tonumber(f.incEdit:GetText()),
+                duration = tonumber(f.durEdit:GetText()),
+            }
+            if f.splitCb:GetChecked() and cnt > 1 then
+                M._queue = M._queue or {}
+                for _ = 2, cnt do
+                    table.insert(M._queue, { link = f._link, opts = {
+                        minBid = base.minBid, inc = base.inc,
+                        duration = base.duration, count = 1,
+                    }})
+                end
+                base.count = 1
+                RMS:Print("Queued %d more single-item auctions for %s.", cnt - 1, f._link)
+            else
+                base.count = cnt
+            end
+            M:Start(f._link, base)
+            f:Hide()
+        end)
+
+        local cancel = Skin:Button(f, "Cancel", 80, 24)
+        cancel:SetPoint("LEFT", go, "RIGHT", 8, 0)
+        cancel:SetScript("OnMouseUp", function() f:Hide() end)
+
+        self.startDlg = f
+    end
+
+    f._link = itemLink
+    local cnt = tonumber(stackCount) or 1
+    f.splitCb:SetChecked(false)
+    f.itemFs:SetText((cnt > 1 and (cnt.."x ") or "")..itemLink)
+    local cfg = RMS.db.goldbid
+    f.minEdit:SetText(tostring(cfg.minBid or 100))
+    f.incEdit:SetText(tostring(cfg.bidIncrement or 100))
+    f.durEdit:SetText(tostring(cfg.bidTimer or 30))
+    f.stackEdit:SetText(tostring(cnt))
+    f:Show()
+end
+
+-- ====================================================================
+-- GDKP payout window (sales list + cut/bonus/split calculator)
+-- ====================================================================
+local function GB_CLASS_COLOR(token)
+    local c = token and RAID_CLASS_COLORS and RAID_CLASS_COLORS[token]
+    if c then return ("|cff%02x%02x%02x"):format(c.r * 255, c.g * 255, c.b * 255) end
+    return "|cffffffff"
+end
+
+-- everyone grouped now, plus already-flagged players who left the group
+local function payoutRoster()
+    local names, seen = {}, {}
+    local n = GetNumRaidMembers()
+    if n > 0 then
+        for i = 1, n do
+            local nm, _, _, _, _, cls = GetRaidRosterInfo(i)
+            if nm then names[#names+1] = { name = nm, class = cls }; seen[nm] = true end
+        end
+    else
+        local me = RMS:PlayerName()
+        local _, myTok = UnitClass("player")
+        names[#names+1] = { name = me, class = myTok }; seen[me] = true
+        for i = 1, GetNumPartyMembers() do
+            local nm = UnitName("party"..i)
+            if nm then
+                local _, tk = UnitClass("party"..i)
+                names[#names+1] = { name = nm, class = tk }; seen[nm] = true
+            end
+        end
+    end
+    local bonus = (RMS.db.goldbid.pot and RMS.db.goldbid.pot.bonus) or {}
+    for nm in pairs(bonus) do
+        if not seen[nm] then names[#names+1] = { name = nm } end
+    end
+    table.sort(names, function(a, b) return a.name < b.name end)
+    return names
+end
+
+local function bonusFlags()
+    RMS.db.goldbid.pot.bonus = RMS.db.goldbid.pot.bonus or {}
+    return RMS.db.goldbid.pot.bonus
+end
+
+function M:OpenPayout()
+    local Skin = RMS.Skin
+    local C    = Skin.COLOR
+
+    local f = self.payoutWin
+    if not f then
+        f = CreateFrame("Frame", "RaidMasterSuiteGDKPPayout", UIParent)
+        f:SetSize(660, 470)
+        f:SetPoint("CENTER")
+        f:SetFrameStrata("DIALOG")
+        f:EnableMouse(true); f:SetMovable(true); f:SetClampedToScreen(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", f.StartMoving)
+        f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+        Skin:SetBackdrop(f, C.bgMain, C.borderHi)
+        tinsert(UISpecialFrames, "RaidMasterSuiteGDKPPayout")
+
+        local title = f:CreateFontString(nil, "OVERLAY"); Skin:Font(title, 14, true)
+        title:SetTextColor(unpack(C.accent))
+        title:SetPoint("TOP", 0, -8); title:SetText("GDKP PAYOUT")
+
+        local close = Skin:CloseButton(f); close:SetPoint("TOPRIGHT", -4, -4)
+        close:SetScript("OnClick", function() f:Hide() end)
+
+        local salesLbl = f:CreateFontString(nil, "OVERLAY"); Skin:Font(salesLbl, 11, true)
+        salesLbl:SetTextColor(unpack(C.accent))
+        salesLbl:SetPoint("TOPLEFT", 10, -34)
+        salesLbl:SetText("Sales")
+
+        local bonusLbl = f:CreateFontString(nil, "OVERLAY"); Skin:Font(bonusLbl, 11, true)
+        bonusLbl:SetTextColor(unpack(C.accent))
+        bonusLbl:SetPoint("TOPLEFT", 366, -34)
+        bonusLbl:SetText("Bonus players  |cff888888(click to toggle)|r")
+
+        -- left: sales list
+        local function buildSaleRow(parent)
+            local r = CreateFrame("Frame", nil, parent)
+            r:SetHeight(20)
+            local bg = r:CreateTexture(nil, "BACKGROUND"); bg:SetAllPoints(); bg:SetTexture(Skin.TEX_WHITE); r.bg = bg
+            local item = r:CreateFontString(nil, "OVERLAY"); Skin:Font(item, 11, false)
+            item:SetPoint("LEFT", 6, 0); item:SetWidth(180)
+            item:SetJustifyH("LEFT"); item:SetWordWrap(false); item:SetNonSpaceWrap(false)
+            r.item = item
+            local who = r:CreateFontString(nil, "OVERLAY"); Skin:Font(who, 10, false)
+            who:SetPoint("LEFT", item, "RIGHT", 6, 0); who:SetPoint("RIGHT", -60, 0)
+            who:SetJustifyH("LEFT"); who:SetTextColor(unpack(C.textDim)); r.who = who
+            local amt = r:CreateFontString(nil, "OVERLAY"); Skin:Font(amt, 11, true)
+            amt:SetPoint("RIGHT", -8, 0); amt:SetTextColor(unpack(C.accent)); r.amt = amt
+            return r
+        end
+        local function updSaleRow(r, item, idx, alt)
+            if not item then return end
+            r.bg:SetVertexColor(alt and 0.10 or 0.13, alt and 0.10 or 0.13, alt and 0.12 or 0.15, 0.6)
+            r.item:SetText(sessItemText(item))
+            r.who:SetText(item.player or "?")
+            r.amt:SetText((item.amount or 0).."g")
+        end
+        local sales = Skin:ScrollList(f, 20, buildSaleRow, updSaleRow)
+        sales:SetPoint("TOPLEFT", 8, -50)
+        sales:SetPoint("BOTTOMRIGHT", f, "BOTTOMLEFT", 356, 168)
+        f.salesList = sales
+
+        -- right: bonus player picker
+        local function buildBonusRow(parent)
+            local r = CreateFrame("Button", nil, parent)
+            r:SetHeight(20)
+            local bg = r:CreateTexture(nil, "BACKGROUND"); bg:SetAllPoints(); bg:SetTexture(Skin.TEX_WHITE); r.bg = bg
+            local hl = r:CreateTexture(nil, "BORDER"); hl:SetAllPoints(); hl:SetTexture(Skin.TEX_WHITE)
+            hl:SetVertexColor(C.good[1], C.good[2], C.good[3], 0.20); hl:Hide(); r.hl = hl
+            local nameFs = r:CreateFontString(nil, "OVERLAY"); Skin:Font(nameFs, 11, false)
+            nameFs:SetPoint("LEFT", 6, 0); r.name = nameFs
+            local tag = r:CreateFontString(nil, "OVERLAY"); Skin:Font(tag, 10, true)
+            tag:SetPoint("RIGHT", -6, 0); tag:SetTextColor(unpack(C.good)); r.tag = tag
+            return r
+        end
+        local function updBonusRow(r, item, idx, alt)
+            if not item then return end
+            r.bg:SetVertexColor(alt and 0.10 or 0.13, alt and 0.10 or 0.13, alt and 0.12 or 0.15, 0.6)
+            r.name:SetText(GB_CLASS_COLOR(item.class)..item.name.."|r")
+            local on = bonusFlags()[item.name]
+            if on then r.hl:Show(); r.tag:SetText("BONUS") else r.hl:Hide(); r.tag:SetText("") end
+            r:SetScript("OnClick", function()
+                local flags = bonusFlags()
+                flags[item.name] = (not flags[item.name]) and true or nil
+                M:RefreshPayout()
+            end)
+        end
+        local bonusList = Skin:ScrollList(f, 20, buildBonusRow, updBonusRow)
+        bonusList:SetPoint("TOPLEFT", 364, -50)
+        bonusList:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -8, 168)
+        f.bonusList = bonusList
+
+        local totalFs = f:CreateFontString(nil, "OVERLAY"); Skin:Font(totalFs, 13, true)
+        totalFs:SetTextColor(unpack(C.accent))
+        totalFs:SetPoint("TOPLEFT", 10, -310)
+        f.totalFs = totalFs
+
+        -- calculator inputs
+        local function calcEdit(label, x, w, default)
+            local e = Skin:EditBox(f, w, 22)
+            e:SetPoint("TOPLEFT", x, -352)
+            e:SetNumeric(true)
+            e:SetText(tostring(default))
+            local lbl = f:CreateFontString(nil, "OVERLAY"); Skin:Font(lbl, 9, false)
+            lbl:SetTextColor(unpack(C.textDim))
+            lbl:SetPoint("BOTTOMLEFT", e, "TOPLEFT", 2, 2)
+            lbl:SetText(label)
+            return e
+        end
+        f.cutEdit   = calcEdit("Organizer cut %", 10,  70, RMS.db.goldbid.cutPercent or 15)
+        f.bonusEdit = calcEdit("Bonus pool %",    100, 70, RMS.db.goldbid.bonusPercent or 5)
+        f.countEdit = calcEdit("Split between",   190, 70, 25)
+
+        f.cutEdit:SetScript("OnTextChanged", function(s)
+            RMS.db.goldbid.cutPercent = tonumber(s:GetText()) or 0
+            M:RefreshPayout()
+        end)
+        f.bonusEdit:SetScript("OnTextChanged", function(s)
+            RMS.db.goldbid.bonusPercent = tonumber(s:GetText()) or 0
+            M:RefreshPayout()
+        end)
+        f.countEdit:SetScript("OnTextChanged", function() M:RefreshPayout() end)
+
+        local resultFs = f:CreateFontString(nil, "OVERLAY"); Skin:Font(resultFs, 12, true)
+        resultFs:SetTextColor(unpack(C.text))
+        resultFs:SetPoint("TOPLEFT", 10, -396)
+        resultFs:SetPoint("RIGHT", -10, 0)
+        resultFs:SetJustifyH("LEFT"); resultFs:SetWordWrap(true)
+        f.resultFs = resultFs
+
+        local annBtn = Skin:Button(f, "Announce to Raid", 130, 24)
+        annBtn:SetPoint("BOTTOMLEFT", 10, 10)
+        annBtn:SetScript("OnMouseUp", function()
+            local total, cut, per, n, bonusPool, perBonus, bonusNames = M:PayoutNumbers()
+            if total <= 0 then RMS:Print("Pot is empty.") return end
+            chatAnnounce(("[RMS] GDKP pot: %dg over %d sales."):format(total, #M:PotSales()))
+            if bonusPool > 0 then
+                local names = table.concat(bonusNames, ", ")
+                if #names > 120 then names = ("%d players"):format(#bonusNames) end
+                chatAnnounce(("[RMS] Cut %d%% = %dg. Bonus %d%% = %dg to %s (%dg each)."):format(
+                    RMS.db.goldbid.cutPercent or 0, cut,
+                    RMS.db.goldbid.bonusPercent or 0, bonusPool, names, perBonus))
+            else
+                chatAnnounce(("[RMS] Organizer cut %d%% = %dg."):format(RMS.db.goldbid.cutPercent or 0, cut))
+            end
+            chatAnnounce(("[RMS] Payout: %dg each to %d raiders. Collect from %s after the raid."):format(
+                per, n, RMS:PlayerName()))
+        end)
+
+        local resetBtn = Skin:Button(f, "Reset Pot", 90, 24)
+        resetBtn:SetPoint("LEFT", annBtn, "RIGHT", 8, 0)
+        resetBtn:SetScript("OnMouseUp", function() M:ResetPot() end)
+        Skin:AttachTooltip(resetBtn, "Reset Pot",
+            {"Clears all recorded sales and bonus picks. Do this at the start of a new raid."})
+
+        self.payoutWin = f
+    end
+
+    -- sensible default: current group size
+    local n = GetNumRaidMembers()
+    if n == 0 then n = GetNumPartyMembers() + 1 end
+    if n > 1 and not f.countEdit:HasFocus() then f.countEdit:SetText(tostring(n)) end
+
+    f:Show()
+    self:RefreshPayout()
+end
+
+-- total -> organizer cut -> bonus pool (split by picked players) -> even split
+function M:PayoutNumbers()
+    local total = self:PotTotal()
+    local pct   = tonumber(RMS.db.goldbid.cutPercent) or 0
+    local bpct  = tonumber(RMS.db.goldbid.bonusPercent) or 0
+    local n     = (self.payoutWin and tonumber(self.payoutWin.countEdit:GetText())) or 25
+    if n < 1 then n = 1 end
+    local cut = math.floor(total * pct / 100)
+    local afterCut = total - cut
+
+    local bonusNames = {}
+    for name, on in pairs((RMS.db.goldbid.pot and RMS.db.goldbid.pot.bonus) or {}) do
+        if on then bonusNames[#bonusNames+1] = name end
+    end
+    table.sort(bonusNames)
+
+    local bonusPool = (#bonusNames > 0) and math.floor(afterCut * bpct / 100) or 0
+    local perBonus  = (#bonusNames > 0) and math.floor(bonusPool / #bonusNames) or 0
+    local per = math.floor((afterCut - bonusPool) / n)
+    return total, cut, per, n, bonusPool, perBonus, bonusNames
+end
+
+function M:RefreshPayout()
+    local f = self.payoutWin
+    if not f or not f:IsShown() then return end
+    f.salesList:SetData(self:PotSales())
+    f.bonusList:SetData(payoutRoster())
+    local total, cut, per, n, bonusPool, perBonus, bonusNames = self:PayoutNumbers()
+    f.totalFs:SetText(("Total pot: %dg  (%d sales)"):format(total, #self:PotSales()))
+    local line = ("Cut: |cffffd070%dg|r    Bonus: |cff60ff60%dg|r -> %d player%s (%dg each)    Per raider: |cff60ff60%dg|r x %d"):format(
+        cut, bonusPool, #bonusNames, #bonusNames == 1 and "" or "s", perBonus, per, n)
+    if #bonusNames == 0 then
+        line = ("Cut: |cffffd070%dg|r    Bonus: |cff888888none picked|r    Per raider: |cff60ff60%dg|r x %d"):format(cut, per, n)
+    end
+    f.resultFs:SetText(line)
 end
 
 -- ====================================================================

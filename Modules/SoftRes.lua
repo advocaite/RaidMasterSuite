@@ -56,14 +56,37 @@ end
 
 function M:Open()
     if not canHostSession() then RMS:Print("Only the raid leader can open a Soft Res session.") return end
-    self.state.active   = true
-    self.state.leader   = RMS:PlayerName()
-    self.state.reserves = {}
-    self.state.items    = {}
-    self.state.log      = {}
+    -- Re-opening (e.g. to let a late joiner reserve) KEEPS existing reserves;
+    -- only Reset wipes them. (GitHub issue: reopen used to reset the list.)
+    local hasExisting = false
+    for _, items in pairs(self.state.reserves) do
+        if next(items) then hasExisting = true; break end
+    end
+    self.state.active = true
+    self.state.leader = RMS:PlayerName()
+    if not hasExisting then
+        self.state.reserves = {}
+        self.state.items    = {}
+        self.state.log      = {}
+    end
     persist()
-    RMS.Comm:Send("softres", "open", { leader = self.state.leader })
-    RMS:Print("Soft Res session OPEN.")
+    RMS.Comm:Send("softres", "open", { leader = self.state.leader, keep = hasExisting and 1 or 0 })
+    if hasExisting then
+        -- re-push every reserve so all clients (any addon version) line up
+        for player, items in pairs(self.state.reserves) do
+            for itemID in pairs(items) do
+                local info = self.state.items[itemID]
+                RMS.Comm:Send("softres", "add", {
+                    player = player, item = itemID,
+                    name = info and info.name or "",
+                    link = info and info.link or "",
+                })
+            end
+        end
+        RMS:Print("Soft Res session RE-OPENED -- existing reserves kept (use Reset for a fresh list).")
+    else
+        RMS:Print("Soft Res session OPEN.")
+    end
     self:Refresh()
 end
 
@@ -130,8 +153,11 @@ end
 RMS.Comm:On("softres", "open", function(p, sender)
     M.state.active   = true
     M.state.leader   = p.leader or sender
-    M.state.reserves = {}
-    M.state.items    = {}
+    -- keep=1 means the host re-opened an existing session; don't wipe
+    if tostring(p.keep) ~= "1" then
+        M.state.reserves = {}
+        M.state.items    = {}
+    end
     persist()
     M:Refresh()
     RMS:Print("Soft Res opened by %s.", sender)
