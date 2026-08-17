@@ -1256,7 +1256,7 @@ function M:BuildPopup()
 
     f.title, f.item, f.timer, f.high, f.edit = title, item, timer, high, edit
     f.bidBtn, f.incBtn, f.allBtn = bid, inc, allin
-    self.popup = f
+    self.popup = Skin:ManagedWindow(f)
     return f
 end
 
@@ -1390,7 +1390,7 @@ function M:OpenStartDialog(itemLink, stackCount)
         cancel:SetPoint("LEFT", go, "RIGHT", 8, 0)
         cancel:SetScript("OnMouseUp", function() f:Hide() end)
 
-        self.startDlg = f
+        self.startDlg = Skin:ManagedWindow(f)
     end
 
     f._link = itemLink
@@ -1492,7 +1492,7 @@ function M:OpenPotInfo()
         note:SetPoint("BOTTOM", 0, 12); note:SetWidth(280)
         note:SetText("Estimate before bonuses. Final payouts are announced by the leader.")
 
-        self.potInfoWin = f
+        self.potInfoWin = Skin:ManagedWindow(f)
     end
     f:Show()
     self:RefreshPotInfo()
@@ -1685,7 +1685,7 @@ function M:OpenPayout()
         Skin:AttachTooltip(resetBtn, "Reset Pot",
             {"Clears all recorded sales and bonus picks. Do this at the start of a new raid."})
 
-        self.payoutWin = f
+        self.payoutWin = Skin:ManagedWindow(f)
     end
 
     -- sensible default: current group size
@@ -1800,7 +1800,7 @@ function M:BuildHistoryWindow()
     f:EnableMouse(true); f:SetMovable(true); f:SetClampedToScreen(true)
     Skin:SetBackdrop(f, C.bgMain, C.borderHi)
     f:Hide()
-    self.historyWin = f
+    self.historyWin = Skin:ManagedWindow(f)
 
     -- title bar (drag handle)
     local title = CreateFrame("Frame", nil, f)

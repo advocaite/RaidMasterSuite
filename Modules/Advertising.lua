@@ -420,7 +420,7 @@ function M:_ShowAchievementPicker(targetEdit)
         f._rebuild = rebuild
         search:SetScript("OnTextChanged", function(s) rebuild(s:GetText() or "") end)
 
-        self._achPopup = f
+        self._achPopup = Skin:ManagedWindow(f)
     end
 
     f.search:SetText("")
@@ -520,7 +520,7 @@ function M:_ShowNeedPicker()
         hint:SetPoint("BOTTOMRIGHT", -10, 14)
         hint:SetText("\"Any\" advertises the whole class and ignores its spec boxes.")
 
-        self._needPopup = f
+        self._needPopup = Skin:ManagedWindow(f)
     end
 
     -- sync from saved config on open

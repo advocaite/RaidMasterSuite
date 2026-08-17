@@ -20,7 +20,7 @@ function UI:Build()
     f:SetMovable(true); f:EnableMouse(true)
     f:Hide()
     Skin:SetBackdrop(f, C.bgMain, C.borderHi)
-    self.frame = f
+    self.frame = Skin:ManagedWindow(f)
 
     -- title bar (drag handle)
     local title = CreateFrame("Frame", nil, f)

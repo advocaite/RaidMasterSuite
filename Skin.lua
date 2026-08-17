@@ -310,6 +310,44 @@ function Skin:ScrollList(parent, rowHeight, builder, updater)
     return f
 end
 
+-- ---------- Horizontal slider ----------
+function Skin:Slider(parent, w, minV, maxV, step)
+    local s = CreateFrame("Slider", nil, parent)
+    s:SetOrientation("HORIZONTAL")
+    s:SetSize(w or 160, 14)
+    self:SetBackdrop(s, C.bgRow, C.border)
+    local thumb = s:CreateTexture(nil, "OVERLAY")
+    thumb:SetTexture(self.TEX_WHITE)
+    thumb:SetVertexColor(unpack(C.accent))
+    thumb:SetSize(8, 12)
+    s:SetThumbTexture(thumb)
+    s:SetMinMaxValues(minV or 0, maxV or 1)
+    s:SetValueStep(step or 0.05)
+    return s
+end
+
+-- ---------- Managed windows (Style: global opacity etc.) ----------
+-- Register every top-level RMS window here so style settings apply to all.
+Skin._windows = {}
+
+local function styleAlpha()
+    local a = RMS.db and RMS.db.style and tonumber(RMS.db.style.alpha)
+    if not a then return 1 end
+    if a < 0.3 then a = 0.3 elseif a > 1 then a = 1 end
+    return a
+end
+
+function Skin:ManagedWindow(f)
+    table.insert(self._windows, f)
+    f:SetAlpha(styleAlpha())
+    return f
+end
+
+function Skin:ApplyWindowAlpha()
+    local a = styleAlpha()
+    for _, f in ipairs(self._windows) do f:SetAlpha(a) end
+end
+
 -- ---------- Tooltip helper ----------
 function Skin:AttachTooltip(widget, title, lines)
     widget:SetScript("OnEnter", function(s)

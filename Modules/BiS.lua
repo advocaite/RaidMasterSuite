@@ -322,7 +322,7 @@ function M:ShowNeedersPopup(rows)
         local list = Skin:ScrollList(f, 36, buildRow, updRow)
         list:SetPoint("TOPLEFT", 8, -32); list:SetPoint("BOTTOMRIGHT", -8, 8)
         f.list = list
-        self.popup = f
+        self.popup = Skin:ManagedWindow(f)
     end
     self.popup.list:SetData(rows)
     self.popup:Show()
@@ -360,7 +360,7 @@ function M:_ShowAltsPopup(anchor, slot, ids)
         close:SetSize(16, 16)
         close:SetPoint("TOPRIGHT", -3, -3)
         close:SetScript("OnClick", function() f:Hide() end)
-        self._altsPopup = f
+        self._altsPopup = Skin:ManagedWindow(f)
     end
 
     f:ClearAllPoints()

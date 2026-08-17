@@ -360,7 +360,7 @@ function M:BuildWindow()
     Skin:SetBackdrop(f, C.bgMain, C.borderHi)
     f:Hide()
     tinsert(UISpecialFrames, "RaidMasterSuiteMLFrame")
-    self.win = f
+    self.win = Skin:ManagedWindow(f)
 
     local title = CreateFrame("Frame", nil, f)
     title:SetPoint("TOPLEFT"); title:SetPoint("TOPRIGHT"); title:SetHeight(30)

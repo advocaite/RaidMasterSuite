@@ -82,7 +82,7 @@ function LP:Build()
     f:EnableMouse(true); f:SetMovable(true); f:SetClampedToScreen(true)
     Skin:SetBackdrop(f, C.bgMain, C.borderHi)
     f:Hide()
-    self.win = f
+    self.win = Skin:ManagedWindow(f)
 
     -- title bar
     local title = CreateFrame("Frame", nil, f)

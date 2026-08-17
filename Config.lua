@@ -58,6 +58,9 @@ Config.DEFAULTS = {
         locked      = false,
         openOnLogin = false,  -- auto-show main window on login / reload
     },
+    style = {
+        alpha = 1.0,  -- global window opacity (0.3 - 1.0)
+    },
 }
 
 local function deepMerge(target, defaults)
@@ -190,6 +193,33 @@ function Config:BuildPanel(parent)
     hideMm.OnValueChanged = function(s, v)
         hideMmOrig(s, v)
         if RMS.MinimapButton then RMS.MinimapButton:UpdateShown() end
+    end
+
+    addSection(col1, "Style")
+    do
+        local sLbl = panel:CreateFontString(nil, "OVERLAY")
+        Skin:Font(sLbl, 12, false)
+        sLbl:SetTextColor(unpack(C.text))
+        sLbl:SetPoint("TOPLEFT", col1.x, col1.y - 2)
+        -- 140 wide: anything larger bleeds into the second settings column
+        local slider = Skin:Slider(panel, 140, 0.3, 1.0, 0.05)
+        slider:SetPoint("TOPLEFT", col1.x + 204, col1.y - 2)
+        local function labelFor(v)
+            sLbl:SetText(("Window opacity: %d%%"):format(math.floor(v * 100 + 0.5)))
+        end
+        slider:SetValue(Config:Get("style.alpha") or 1)
+        labelFor(Config:Get("style.alpha") or 1)
+        slider:SetScript("OnValueChanged", function(s)
+            local v = math.floor(s:GetValue() * 20 + 0.5) / 20  -- snap to 5%
+            Config:Set("style.alpha", v)
+            labelFor(v)
+            Skin:ApplyWindowAlpha()  -- live preview on every open window
+        end)
+        refreshers[#refreshers+1] = function()
+            local v = Config:Get("style.alpha") or 1
+            slider:SetValue(v); labelFor(v)
+        end
+        col1.y = col1.y - 26
     end
 
     addSection(col1, "BiS Scan")
