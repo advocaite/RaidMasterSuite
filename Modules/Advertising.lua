@@ -676,7 +676,7 @@ function M:BuildUI(parent)
     local achHint = formBody:CreateFontString(nil, "OVERLAY"); Skin:Font(achHint, 9, false)
     achHint:SetTextColor(unpack(C.textDim))
     achHint:SetPoint("TOPLEFT", achLbl, "TOPLEFT", 90, 0); achHint:SetPoint("RIGHT", formBody, "RIGHT", -8, 0)
-    achHint:SetJustifyH("LEFT"); achHint:SetText("(shift-click achievements to insert)")
+    achHint:SetJustifyH("LEFT"); achHint:SetText("(shift-click links here or into Notes)")
 
     local achEdit = Skin:EditBox(formBody, 100, 50)
     achEdit:SetPoint("TOPLEFT", achLbl, "BOTTOMLEFT", 8, -4)
@@ -691,20 +691,28 @@ function M:BuildUI(parent)
     pickBtn:SetScript("OnMouseUp", function() M:_ShowAchievementPicker(achEdit) end)
 
     self._achEdit = achEdit  -- expose for global shift-click hook below
+    -- fields that accept shift-clicked links (items, achievements, quests...)
+    self._linkEdits = { achEdit, notesEdit }
 
     -- Shift-click links from any source (achievement frame, character pane,
-    -- quest log, etc.) when our edit has focus. ChatEdit_InsertLink only
-    -- fires when chat is active, so we hook the lower-level entry point too.
+    -- bags, quest log, etc.) into whichever link-field has focus.
+    -- ChatEdit_InsertLink only fires when chat is active, so we hook the
+    -- lower-level entry point too.
     if not RMS._advClickHooked then
         RMS._advClickHooked = true
+        local function focusedLinkEdit()
+            for _, e in ipairs(M._linkEdits or {}) do
+                if e:IsVisible() and e:HasFocus() then return e end
+            end
+        end
         hooksecurefunc("ChatEdit_InsertLink", function(text)
-            local e = M._achEdit
-            if e and e:IsVisible() and e:HasFocus() then e:Insert(text); return true end
+            local e = focusedLinkEdit()
+            if e and text then e:Insert(text); return true end
         end)
         hooksecurefunc("HandleModifiedItemClick", function(link)
             if not link or not IsShiftKeyDown() then return end
-            local e = M._achEdit
-            if e and e:IsVisible() and e:HasFocus() then e:Insert(link) end
+            local e = focusedLinkEdit()
+            if e then e:Insert(link) end
         end)
     end
 

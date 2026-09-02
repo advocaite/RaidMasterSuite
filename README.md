@@ -127,6 +127,7 @@ Leader pre-assigns specific items to specific players. When the master looter op
 - When you're the **master looter** and open a corpse, a window pops with every drop at or above the **loot threshold set for the dungeon** (or a fixed quality of your choice).
 - Click a drop → see every eligible candidate with their **+1 count** and **BiS / SoftRes / HardRes** tags, sorted hard-res first, then rolls, then fewest +1s.
 - **Call Roll** announces the item and collects `/roll`s right in the window — timer configurable (3–60s, default 8), with an optional "5... 4... 3... 2... 1..." raid-chat countdown before the winner is announced.
+- **MS / OS / Transmog rolling**: every RMS raider gets a roll popup (item icon + name + timer) with **MS** (/roll 100), **OS** (/roll 99), **Transmog** (/roll 98) and **Pass** buttons; non-addon raiders just type the ranges from the announcement. The ML window tags each roll (green MS / gold OS / purple TM / grey PASS), sorts by priority, and the winner respects MS > OS > TM — an MS 12 beats an OS 99.
 - **Give** hands the item out via `GiveMasterLoot`, announces the award, logs it to history, and (optionally) marks the winner +1 automatically.
 
 ### Raid Comp

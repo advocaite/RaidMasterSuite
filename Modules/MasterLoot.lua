@@ -165,6 +165,11 @@ end
 local ROLL_GRACE   = 1.5  -- keep accepting lag-delayed rolls this long after the timer
 local PREROLL_LIFE = 5    -- rolls typed up to this long before Call Roll still count
 
+-- MS/OS/Transmog by roll RANGE: /roll 100 = mainspec, 99 = offspec, 98 = tmog
+local ROLL_KINDS = { [100] = "MS", [99] = "OS", [98] = "TM" }
+local KIND_PRIO  = { MS = 3, OS = 2, TM = 1 }
+local KIND_NAMES = { MS = "mainspec", OS = "offspec", TM = "transmog" }
+
 function M:CallRoll(item)
     if not item then return end
     -- self-heal stale candidate lists without needing to reopen the corpse
@@ -174,7 +179,9 @@ function M:CallRoll(item)
     -- session ended (they won't roll again -- they think they already did)
     local rolls = {}
     for player, e in pairs(self._preRolls or {}) do
-        if (GetTime() - e.at) <= PREROLL_LIFE then rolls[player] = e.value end
+        if (GetTime() - e.at) <= PREROLL_LIFE then
+            rolls[player] = { value = e.value, kind = e.kind or "MS" }
+        end
     end
     self._preRolls = nil
     self._roll = { id = item.id, link = item.link, done = false,
@@ -182,7 +189,11 @@ function M:CallRoll(item)
                    -- countdown announcements start at 5s remaining (or less
                    -- for short timers); nil = countdown disabled
                    countdownNext = (cfg().countdown ~= false) and math.min(5, t - 1) or nil }
-    announce(("Roll for %s now! (/roll, %ds)"):format(item.link or item.name, t))
+    -- popup for every RMS client (and ourselves); ranges for everyone else
+    RMS.Comm:Send("masterloot", "rollstart", { item = item.id, dur = t })
+    self:ShowRollPopup(item.id, t)
+    announce(("Roll for %s -- MS: /roll   OS: /roll 99   Transmog: /roll 98   (%ds)"):format(
+        item.link or item.name, t))
     self:RefreshWindow()
 end
 
@@ -190,17 +201,25 @@ local function finishRoll()
     local r = M._roll
     if not r or r.done then return end
     r.done = true
-    local best, bestVal
-    for player, val in pairs(r.rolls) do
-        if not bestVal or val > bestVal then best, bestVal = player, val end
+    -- MS beats OS beats Transmog; value only breaks ties within a group
+    local best
+    for player, roll in pairs(r.rolls) do
+        if roll.kind ~= "PASS" then
+            local p = KIND_PRIO[roll.kind] or 0
+            if not best or p > best.prio or (p == best.prio and roll.value > best.value) then
+                best = { player = player, value = roll.value, kind = roll.kind, prio = p }
+            end
+        end
     end
     if best then
         if cfg().announceRolls ~= false then
-            announce(("Roll ended for %s: %s wins with %d"):format(r.link, best, bestVal))
+            announce(("Roll ended for %s: %s wins with %d (%s)"):format(
+                r.link, best.player, best.value, KIND_NAMES[best.kind] or best.kind))
         end
     else
         RMS:Print("Roll ended for %s: nobody rolled.", r.link)
     end
+    RMS.Comm:Send("masterloot", "rollend", {})
     M:RefreshWindow()
 end
 
@@ -225,18 +244,21 @@ end)
 local function onSystemMsg(msg)
     local player, val, lo, hi = msg:match("^(%S+) rolls (%d+) %((%d+)%-(%d+)%)")
     if not player then return end
-    if tonumber(lo) ~= 1 or tonumber(hi) ~= 100 then return end
+    if tonumber(lo) ~= 1 then return end
+    local kind = ROLL_KINDS[tonumber(hi)]
+    if not kind then return end  -- only 1-100 / 1-99 / 1-98 count
     val = tonumber(val)
     local r = M._roll
     if r and not r.done then
-        if r.rolls[player] then return end  -- first roll counts
-        r.rolls[player] = val
+        local existing = r.rolls[player]
+        if existing and existing.kind ~= "PASS" then return end  -- first roll counts
+        r.rolls[player] = { value = val, kind = kind }  -- a real roll overrides a pass
         M:RefreshWindow()
     else
         -- no session running: remember it as a pre-roll for the next Call Roll
         M._preRolls = M._preRolls or {}
         if not M._preRolls[player] then
-            M._preRolls[player] = { value = val, at = GetTime() }
+            M._preRolls[player] = { value = val, kind = kind, at = GetTime() }
         end
     end
 end
@@ -335,11 +357,17 @@ local function buildCandidateRows(item)
             roll    = (M._roll and M._roll.id == item.id) and M._roll.rolls[name] or nil,
         }
     end
-    -- HR assignee first; then rolled (highest first); then fewest +1; then name
+    -- HR assignee first; then rolls by MS > OS > TM and value; passes and
+    -- non-rollers last; then fewest +1; then name
+    local function rollScore(roll)
+        if not roll then return -1 end
+        if roll.kind == "PASS" then return 0 end
+        return (KIND_PRIO[roll.kind] or 0) * 1000 + (roll.value or 0)
+    end
     table.sort(rows, function(a, b)
         if a.hr ~= b.hr then return a.hr end
-        if (a.roll ~= nil) ~= (b.roll ~= nil) then return a.roll ~= nil end
-        if a.roll and b.roll and a.roll ~= b.roll then return a.roll > b.roll end
+        local sa, sb = rollScore(a.roll), rollScore(b.roll)
+        if sa ~= sb then return sa > sb end
         if a.plus ~= b.plus then return a.plus < b.plus end
         return a.player < b.player
     end)
@@ -469,8 +497,8 @@ function M:BuildWindow()
         local give = Skin:Button(r, "Give", 54, 20)
         give:SetPoint("RIGHT", -4, 0); r.give = give
 
-        local roll = r:CreateFontString(nil, "OVERLAY"); Skin:Font(roll, 12, true)
-        roll:SetPoint("RIGHT", give, "LEFT", -8, 0); roll:SetWidth(34)
+        local roll = r:CreateFontString(nil, "OVERLAY"); Skin:Font(roll, 11, true)
+        roll:SetPoint("RIGHT", give, "LEFT", -8, 0); roll:SetWidth(58)
         roll:SetJustifyH("RIGHT"); r.roll = roll
 
         local plus = r:CreateFontString(nil, "OVERLAY"); Skin:Font(plus, 12, true)
@@ -508,7 +536,17 @@ function M:BuildWindow()
         else
             r.plus:SetText("|cff5599550|r")
         end
-        r.roll:SetText(item.roll and tostring(item.roll) or "")
+        local roll = item.roll
+        if not roll then
+            r.roll:SetText("")
+        elseif roll.kind == "PASS" then
+            r.roll:SetText("|cff888888PASS|r")
+        else
+            local col = (roll.kind == "MS" and "|cff60ff60")
+                     or (roll.kind == "OS" and "|cffffd070")
+                     or "|cffc080ff"
+            r.roll:SetText(("%s%s %d|r"):format(col, roll.kind, roll.value or 0))
+        end
 
         r.give:SetScript("OnMouseUp", function()
             local it = selectedItem()
@@ -620,6 +658,184 @@ function M:Preview()
         self._previewRetries = nil
     end
 end
+
+-- ---------- roll popup (MS / OS / Transmog / Pass, shown to every client) ----------
+local function senderIsLeadership(sender)
+    if sender == RMS:PlayerName() then return true end
+    local method, _, raidId = GetLootMethod()
+    if method == "master" and raidId and raidId > 0
+       and UnitName("raid"..raidId) == sender then
+        return true
+    end
+    local n = GetNumRaidMembers()
+    if n == 0 then return true end  -- party: trust
+    for i = 1, n do
+        local name, rank = GetRaidRosterInfo(i)
+        if name == sender then return (rank or 0) >= 1 end
+    end
+    return false
+end
+
+function M:BuildRollPopup()
+    if self.rollPopup then return self.rollPopup end
+    local Skin = RMS.Skin
+    local C    = Skin.COLOR
+
+    local f = CreateFrame("Frame", "RaidMasterSuiteRollPopup", UIParent)
+    f:SetSize(330, 128)
+    f:SetPoint("TOP", 0, -240)
+    f:SetFrameStrata("DIALOG")
+    f:EnableMouse(true); f:SetMovable(true); f:SetClampedToScreen(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+    Skin:SetBackdrop(f, C.bgMain, C.accent)
+    f:Hide()
+    tinsert(UISpecialFrames, "RaidMasterSuiteRollPopup")
+
+    local title = f:CreateFontString(nil, "OVERLAY"); Skin:Font(title, 13, true)
+    title:SetTextColor(unpack(C.accent))
+    title:SetPoint("TOPLEFT", 12, -8); title:SetText("ROLL")
+
+    local timer = f:CreateFontString(nil, "OVERLAY"); Skin:Font(timer, 20, true)
+    timer:SetTextColor(unpack(C.accent))
+    timer:SetPoint("TOPRIGHT", -30, -6)
+    f.timerFs = timer
+
+    local close = Skin:CloseButton(f)
+    close:SetSize(18, 18)
+    close:SetPoint("TOPRIGHT", -4, -4)
+    close:SetScript("OnClick", function() f:Hide() end)
+
+    local icon = f:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(30, 30)
+    icon:SetPoint("TOPLEFT", 12, -30)
+    icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    f.icon = icon
+
+    local name = f:CreateFontString(nil, "OVERLAY"); Skin:Font(name, 12, true)
+    name:SetPoint("LEFT", icon, "RIGHT", 8, 0)
+    name:SetPoint("RIGHT", f, "RIGHT", -10, 0)
+    name:SetJustifyH("LEFT"); name:SetWordWrap(false); name:SetNonSpaceWrap(false)
+    f.nameFs = name
+
+    -- hover the item row for its tooltip
+    local hover = CreateFrame("Button", nil, f)
+    hover:SetPoint("TOPLEFT", icon, "TOPLEFT")
+    hover:SetSize(290, 30)
+    hover:SetScript("OnEnter", function(s)
+        if not f._itemID then return end
+        GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+        GameTooltip:SetHyperlink("item:"..f._itemID)
+        GameTooltip:Show()
+    end)
+    hover:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    local status = f:CreateFontString(nil, "OVERLAY"); Skin:Font(status, 9, false)
+    status:SetTextColor(unpack(C.textDim))
+    status:SetPoint("BOTTOM", 0, 40)
+    status:SetWidth(310)
+    f.statusFs = status
+
+    function f:SetRolled(kind)
+        f.msBtn:Disable(); f.osBtn:Disable(); f.tmBtn:Disable(); f.passBtn:Disable()
+        if kind == "PASS" then
+            f.statusFs:SetText("You passed on this item.")
+        else
+            f.statusFs:SetText(("You rolled %s -- good luck!"):format(KIND_NAMES[kind] or kind))
+        end
+    end
+
+    local function rollBtn(label, x, w, tip, fn)
+        local b = Skin:Button(f, label, w, 24)
+        b:SetPoint("BOTTOMLEFT", x, 10)
+        Skin:AttachTooltip(b, label, { tip })
+        b:SetScript("OnMouseUp", function(s)
+            if s.disabled then return end
+            fn()
+        end)
+        return b
+    end
+    f.msBtn = rollBtn("MS", 12, 64,
+        "Mainspec need -- /roll 1-100. Beats every OS and Transmog roll.",
+        function() RandomRoll(1, 100); f:SetRolled("MS") end)
+    f.osBtn = rollBtn("OS", 82, 64,
+        "Offspec -- /roll 1-99. Beats Transmog, loses to any MS roll.",
+        function() RandomRoll(1, 99); f:SetRolled("OS") end)
+    f.tmBtn = rollBtn("Tmog", 152, 64,
+        "Transmog / looks -- /roll 1-98. Lowest priority.",
+        function() RandomRoll(1, 98); f:SetRolled("TM") end)
+    f.passBtn = rollBtn("Pass", 246, 64,
+        "Sit this one out (shows as PASS to the master looter).",
+        function()
+            RMS.Comm:Send("masterloot", "pass", { item = f._itemID })
+            f:SetRolled("PASS")
+        end)
+
+    f:SetScript("OnUpdate", function(s)
+        if not s._deadline then return end
+        local rem = s._deadline - GetTime()
+        if rem <= -3 then s:Hide(); return end
+        if rem < 0 then rem = 0 end
+        s.timerFs:SetText(("%.1fs"):format(rem))
+        s.timerFs:SetTextColor(unpack(rem <= 3 and C.bad or C.accent))
+    end)
+
+    self.rollPopup = Skin:ManagedWindow(f)
+    return f
+end
+
+function M:ShowRollPopup(itemID, duration)
+    itemID = tonumber(itemID)
+    if not itemID then return end
+    local f = self:BuildRollPopup()
+    f._itemID   = itemID
+    f._deadline = GetTime() + (tonumber(duration) or 8)
+    f.msBtn:Enable(); f.osBtn:Enable(); f.tmBtn:Enable(); f.passBtn:Enable()
+    f.statusFs:SetText("MS beats OS beats Transmog -- highest roll in the best group wins.")
+
+    local name, link, _, _, _, _, _, _, _, tex = GetItemInfo(itemID)
+    f.nameFs:SetText(link or name or ("item:"..itemID))
+    f.icon:SetTexture(tex or "Interface\\Icons\\INV_Misc_QuestionMark")
+    if not link then
+        -- uncached: warm and repaint once the item resolves
+        warmItem(itemID)
+        local fr = CreateFrame("Frame"); local t = 0
+        fr:SetScript("OnUpdate", function(s, dt)
+            t = t + dt
+            if t > 0.8 then
+                s:SetScript("OnUpdate", nil)
+                local _, l2, _, _, _, _, _, _, _, tx2 = GetItemInfo(itemID)
+                if l2 and f._itemID == itemID then
+                    f.nameFs:SetText(l2)
+                    f.icon:SetTexture(tx2 or "Interface\\Icons\\INV_Misc_QuestionMark")
+                end
+            end
+        end)
+    end
+    f:Show()
+end
+
+-- popup broadcast from the ML; pass replies; end-of-roll closes popups
+RMS.Comm:On("masterloot", "rollstart", function(p, sender)
+    if sender == RMS:PlayerName() then return end  -- we showed ours directly
+    if not senderIsLeadership(sender) then return end
+    M:ShowRollPopup(tonumber(p.item), tonumber(p.dur) or 8)
+end)
+
+RMS.Comm:On("masterloot", "pass", function(p, sender)
+    local r = M._roll
+    if not r or r.done then return end
+    if tonumber(p.item) ~= r.id then return end
+    if r.rolls[sender] then return end  -- an actual roll stands
+    r.rolls[sender] = { kind = "PASS" }
+    M:RefreshWindow()
+end)
+
+RMS.Comm:On("masterloot", "rollend", function(_, sender)
+    if not senderIsLeadership(sender) then return end
+    if M.rollPopup and M.rollPopup:IsShown() then M.rollPopup:Hide() end
+end)
 
 -- ---------- main tab ----------
 function M:BuildUI(parent)
