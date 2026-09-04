@@ -1,8 +1,8 @@
 # Raid Master Suite
 
-An all-in-one raid utility addon for **World of Warcraft 3.3.5a (WOTLK)**. Soft Res, Hard Res, +1 loot tracking, master loot distribution, DKP, Gold-bid auctions, BiS scanning, chat advertising, and more — bundled into a single dark/gold themed UI inspired by modern Zygor.
+An all-in-one raid utility addon for **World of Warcraft 3.3.5a (WOTLK)**. Soft Res (with softres.it import), Hard Res, +1 loot tracking, master loot distribution with MS/OS/Transmog roll popups, a full GDKP suite, raid comp builder, DKP, BiS scanning, chat advertising, and more — bundled into a single dark/gold themed UI inspired by modern Zygor.
 
-> **Status:** v0.2.0 — actively developed. Patches and feature requests welcome.
+> **Status:** v0.5.0 — actively developed. Patches and feature requests welcome.
 >
 > **Repo:** https://github.com/advocaite/RaidMasterSuite — open an [Issue](https://github.com/advocaite/RaidMasterSuite/issues) for bugs / feature requests.
 
@@ -18,13 +18,13 @@ An all-in-one raid utility addon for **World of Warcraft 3.3.5a (WOTLK)**. Soft 
 | **Master Loot** | Auto-popup for the ML with every drop above the loot threshold; candidates show +1 / BiS / SR / HR tags; call rolls and hand out loot in one click. |
 | **Raid Comp** | Pick any WOTLK raid: typical GS ask, tank/healer/dps split, and a live buff & debuff coverage checklist vs your current group. |
 | **DKP**      | Per-guild standings, officer-managed award/deduct, presets, full audit log. GUILD-synced.   |
-| **Gold Bid** | Full GDKP toolkit: live auctions with chat bidding (no addon needed to bid), per-item start price/increment, raid-wide pot tracking, cut & split payout calculator. |
+| **Gold Bid** | Full GDKP toolkit: live auctions with chat bidding (no addon needed to bid), per-item start price/increment/stack, raid-wide pot tracking, cut / bonus-pool / split payout calculator, per-player budgets visible to leadership. |
 | **BiS Scan** | Detects each raider's class/spec, scans every loot drop, popup of who needs it. Per-phase BiS lists (Pre-Raid → ICC). |
-| **Advertise**| Compose recruitment messages and broadcast to selected chat channels on a timer.            |
-| **Settings** | All thresholds, defaults, and toggles (auto-open on login, etc.)                            |
+| **Advertise**| Structured ad builder: run type, GS, achievement links, reserved BOE/patterns/orbs, needed classes & role counts, live 255-char counter, timed auto-broadcast. |
+| **Settings** | All thresholds, defaults, and toggles — plus a **Style** section (global window opacity slider, more coming). |
 | **Donate**   | How to support the author via server coin gifting or in-game gold mail.                     |
 
-All raid-side features sync automatically over the **`RMS` addon channel** (RAID / PARTY) so every member running the addon sees the same state in real time. DKP uses the **GUILD** channel and is officer-gated.
+All raid-side features sync automatically over the **`RMS` addon channel** (RAID / PARTY) so every member running the addon sees the same state in real time. DKP uses the **GUILD** channel and is officer-gated. A draggable **crown minimap button** toggles the window (left-click), opens Settings (right-click), and can be hidden in Settings.
 
 ---
 
@@ -114,7 +114,11 @@ Leader pre-assigns specific items to specific players. When the master looter op
 - **Chat bidding**: anyone can bid by typing `500` or `bid 500` in raid/party chat (or whispering the host) — no addon required. The host's client validates and syncs it to everyone.
 - After timer expires, host trades the winner. Addon watches `TRADE_MONEY_CHANGED` / `UI_INFO_MESSAGE` and auto-confirms when the offered gold matches.
 - If trade fails, host clicks **Next Bidder** → item is offered to runner-up.
-- **GDKP pot**: with GDKP mode on, every paid/awarded sale accumulates into a persistent pot (running total broadcast to the raid). The **Payout** window lists all sales, takes an organizer cut %, splits the rest evenly, and announces the per-raider payout to chat. Reset the pot at the start of each raid.
+- **All In** button on the bid popup bids every gold piece you carry (must still beat current + increment); once a winner is decided the bid controls disappear from the popup.
+- **GDKP pot**: with GDKP mode on, every paid/awarded sale accumulates into a persistent pot (running total broadcast to the raid). The **Payout** window lists all sales, takes an organizer cut %, carves a **performance-bonus pool %** split by click-to-pick bonus players, splits the rest evenly, and announces it all to chat. Reset the pot at the start of each raid.
+- **Budgets**: every raider can set a per-character GDKP budget (capped at carried gold) and push it to leadership with the **Set** button. The host's payout window shows `budget/carried gold` per raider (`no addon` when unknown) — shared only by whisper, only with leader/assist/ML.
+- **Permissions**: the full payout tools open only for leader/assist/ML; everyone else gets a read-only pot summary (total + estimated share so far).
+- **Delivery hardening** for servers that drop addon-channel messages (Warmane): compact payloads, a 2s re-broadcast, and the chat announcement doubles as a session beacon — clients that missed the start fetch it from the host, so popups appear and tick for everyone, including late joiners and mid-auction reloads.
 - **Full History** browser: every past session saved (cap 200), with a **By Item** view showing avg / max / min sale price.
 
 ### +1 Loot
@@ -134,7 +138,9 @@ Leader pre-assigns specific items to specific players. When the master looter op
 ### Raid Comp
 - Pick any WOTLK raid (10/25): shows the **typical pug GS ask**, phase tag, and the standard **tank / healer / dps split** (per-raid notes for zergs, hard modes, attempt limits).
 - **Live buff & debuff coverage**: the full WOTLK checklist (Bloodlust, Kings, Replenishment, 20% armor, the 5%/3% auras, etc.) evaluated against your current group — green check = covered (shows who), yellow = right class present but spec unknown, red = nobody can bring it (shows which specs can).
-- Spec-specific checks use the specs auto-broadcast by the BiS module; raiders without RMS count as class-only.
+- Spec-specific checks use the specs auto-broadcast by the BiS module; raiders without RMS count as class-only. Hover any coverage row for the full buff name, who covers it, and every class/spec that could.
+- **Raid Helper** column: live roster vs the target comp (`2/3T 4/6H 8/16D`), a computed "what to recruit" line (role deficits + the classes that plug the most missing buffs), and a **prospect tracker** — add names as people whisper you, one-click **Inv**, and they auto-flip to green IN when they join or red GONE if they leave.
+- **Prefill Advert & Go**: one click writes the raid name, GS ask, missing role counts, and top buff-pickup classes into the Advertising tab and takes you there.
 - Data lives in `Data/RaidCompData.lua` — curated, editable, built for Warmane-style progression realms. TBC/Classic raids can be appended later.
 
 ### BiS Scan
@@ -148,9 +154,13 @@ Leader pre-assigns specific items to specific players. When the master looter op
 - `+N alt` badge per slot opens a popup listing all alternates with hover tooltips.
 
 ### Advertising
-- Compose messages from structured fields (raid name, run type, min GS, achievement, discord, notes).
-- **Achievement picker** pulls the **full WOTLK Dungeons & Raids achievement list** from the game's API at runtime, with search.
-- Shift-click any achievement / item / quest in the game to insert into the achievement field.
+- Compose messages from structured fields: raid name, run type (blank by default; left-click cycles, right-click clears), min GS, achievement, discord, notes.
+- **Achievement picker** pulls the **full WOTLK Dungeons & Raids achievement list** from the game's API at runtime, with search. Picked achievements compose as **"link [Achievement]"** in the ad.
+- **Reserved checkboxes** (BOE / Patterns / Orbs) compose "BOE + Patterns + Orbs reserved".
+- **Need picker**: role counts (tanks/healers/melee/ranged) plus per-class/spec checkboxes → "Need: 2 Tanks, 3 Healers, Resto Shaman, Mage".
+- Optional "(RMS addon for bidding)" suffix toggle.
+- **Shift-click links** (items, achievements, quests) into the focused Achievement or **Notes** field — item links show clickable in the broadcast ad. A **"To RMS" button on the profession window** appends your profession link to Notes directly.
+- Live **255-character counter** on the preview (links count their full hidden length); over-long ads are refused instead of risking a disconnect, and the auto-loop stops itself.
 - Auto-detects every chat channel you've joined (1–10). Manual add via **Join** input.
 - **Send Now** for a one-shot, **Start Auto** to repeat at a configurable interval (min 30s).
 - Recent broadcasts log preserved.
@@ -174,6 +184,7 @@ RaidMasterSuite/
 ├── Comm.lua                 # addon-channel sync (RAID / PARTY / GUILD / WHISPER)
 ├── Config.lua               # SavedVariables defaults + Settings tab UI
 ├── UI.lua                   # main window + tab bar
+├── MinimapButton.lua        # draggable crown button on the minimap
 ├── LootPicker.lua           # reusable Expansion -> Instance -> Boss picker popup
 ├── Modules/
 │   ├── SoftRes.lua
@@ -217,7 +228,7 @@ Both scripts produce CRLF-line-ending files (required for the WoW 3.3.5a Lua loa
 | Variable                 | Purpose                                                 |
 |--------------------------|---------------------------------------------------------|
 | `RaidMasterSuiteDB`      | Account-wide: settings, DKP per-guild, gold-bid history, etc. |
-| `RaidMasterSuiteCharDB`  | Per-character: BiS overrides                            |
+| `RaidMasterSuiteCharDB`  | Per-character: BiS overrides, GDKP budget               |
 
 To reset all settings: `/console reload`-out, delete `WTF/Account/<acct>/SavedVariables/RaidMasterSuite.lua`, log back in.
 
