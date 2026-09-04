@@ -228,6 +228,174 @@ RMS.Comm:On("softres", "syncreq", function(_, sender)
     RMS:Debug("SR: synced state to %s", sender)
 end)
 
+-- ---------- softres.it CSV import ----------
+-- One CSV field-splitter that survives quoted fields with commas inside
+-- ("Havoc's Call, Blade of Lordaeron Kings") and doubled "" escapes.
+local function parseCSVLine(line)
+    local fields, pos = {}, 1
+    while true do
+        if line:sub(pos, pos) == '"' then
+            local val, p = "", pos + 1
+            while true do
+                local ch = line:sub(p, p)
+                if ch == "" then break end
+                if ch == '"' then
+                    if line:sub(p + 1, p + 1) == '"' then
+                        val = val..'"'; p = p + 2
+                    else
+                        p = p + 1; break
+                    end
+                else
+                    val = val..ch; p = p + 1
+                end
+            end
+            fields[#fields+1] = val
+            if line:sub(p, p) == "," then pos = p + 1 else break end
+        else
+            local comma = line:find(",", pos, true)
+            if comma then
+                fields[#fields+1] = line:sub(pos, comma - 1)
+                pos = comma + 1
+            else
+                fields[#fields+1] = line:sub(pos)
+                break
+            end
+        end
+    end
+    return fields
+end
+
+-- Columns: Item Name, Item ID, From, Raider Name, Class, Spec, Note, Extra, Date
+function M:ImportCSV(text)
+    if not canHostSession() then
+        RMS:Print("Only the raid leader can import Soft Res data.")
+        return false
+    end
+    local newReserves, newItems = {}, {}
+    local count, playersSet = 0, {}
+    for line in (text or ""):gmatch("[^\r\n]+") do
+        local f = parseCSVLine(line)
+        local itemName = f[1]
+        local id       = tonumber(f[2])
+        local player   = f[4]
+        -- header and malformed lines fail the numeric-id test and are skipped
+        if id and player and player ~= "" then
+            player = player:sub(1, 1):upper()..player:sub(2)
+            newReserves[player] = newReserves[player] or {}
+            if not newReserves[player][id] then
+                newReserves[player][id] = true
+                count = count + 1
+            end
+            if not newItems[id] then
+                local _, link = GetItemInfo(id)
+                newItems[id] = { name = itemName, link = link }
+            end
+            playersSet[player] = true
+        end
+    end
+    if count == 0 then
+        RMS:Print("No reserves found -- paste the CSV exported from softres.it (header line included is fine).")
+        return false
+    end
+
+    -- fresh session with the imported list, synced to the whole raid
+    self.state.active   = true
+    self.state.leader   = RMS:PlayerName()
+    self.state.reserves = newReserves
+    self.state.items    = newItems
+    self.state.log      = {}
+    persist()
+    RMS.Comm:Send("softres", "open", { leader = self.state.leader, keep = 0 })
+    for player, items in pairs(newReserves) do
+        for itemID in pairs(items) do
+            local info = newItems[itemID]
+            RMS.Comm:Send("softres", "add", {
+                player = player, item = itemID,
+                name = (info and info.name) or "",
+                link = (info and info.link) or "",
+            })
+        end
+    end
+    local np = 0
+    for _ in pairs(playersSet) do np = np + 1 end
+    RMS:Print("Imported %d soft reserves for %d raiders from softres.it.", count, np)
+    self:Refresh()
+    return true
+end
+
+function M:OpenImportDialog()
+    local Skin = RMS.Skin
+    local C    = Skin.COLOR
+    local f = self._importWin
+    if not f then
+        f = CreateFrame("Frame", "RaidMasterSuiteSRImport", UIParent)
+        f:SetSize(470, 360)
+        f:SetPoint("CENTER")
+        f:SetFrameStrata("FULLSCREEN_DIALOG")
+        f:EnableMouse(true); f:SetMovable(true); f:SetClampedToScreen(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", f.StartMoving)
+        f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+        Skin:SetBackdrop(f, C.bgMain, C.accent)
+        tinsert(UISpecialFrames, "RaidMasterSuiteSRImport")
+
+        local title = f:CreateFontString(nil, "OVERLAY"); Skin:Font(title, 14, true)
+        title:SetTextColor(unpack(C.accent))
+        title:SetPoint("TOP", 0, -8); title:SetText("IMPORT SOFT RES  (softres.it)")
+
+        local close = Skin:CloseButton(f); close:SetPoint("TOPRIGHT", -4, -4)
+        close:SetScript("OnClick", function() f:Hide() end)
+
+        local desc = f:CreateFontString(nil, "OVERLAY"); Skin:Font(desc, 10, false)
+        desc:SetTextColor(unpack(C.text))
+        desc:SetPoint("TOPLEFT", 12, -30)
+        desc:SetPoint("RIGHT", -12, 0)
+        desc:SetJustifyH("LEFT"); desc:SetWordWrap(true)
+        desc:SetText("On softres.it open your raid and export it as CSV. Copy everything (the header line is fine), click the box below, paste with |cffffd070Ctrl+V|r, then hit Import. This opens a FRESH Soft Res session with the imported reserves and syncs it to the raid.")
+
+        local box = Skin:Panel(f)
+        box:SetPoint("TOPLEFT", 12, -92)
+        box:SetPoint("BOTTOMRIGHT", -12, 44)
+
+        local scroll = CreateFrame("ScrollFrame", "RaidMasterSuiteSRImportScroll", box, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT", 6, -6)
+        scroll:SetPoint("BOTTOMRIGHT", -28, 6)
+
+        local edit = CreateFrame("EditBox", nil, scroll)
+        edit:SetMultiLine(true)
+        edit:SetAutoFocus(false)
+        edit:SetFont(Skin.FONT, 11, "")
+        edit:SetTextColor(unpack(C.text))
+        edit:SetWidth(400)
+        edit:SetMaxLetters(0)
+        edit:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
+        scroll:SetScrollChild(edit)
+        f.edit = edit
+
+        -- clicking anywhere in the box focuses the edit for pasting
+        box:EnableMouse(true)
+        box:SetScript("OnMouseDown", function() edit:SetFocus() end)
+
+        local importBtn = Skin:Button(f, "Import", 100, 24)
+        importBtn:SetPoint("BOTTOMLEFT", 12, 10)
+        importBtn:SetScript("OnMouseUp", function()
+            if M:ImportCSV(f.edit:GetText() or "") then
+                f.edit:SetText("")
+                f:Hide()
+            end
+        end)
+
+        local cancel = Skin:Button(f, "Cancel", 80, 24)
+        cancel:SetPoint("LEFT", importBtn, "RIGHT", 8, 0)
+        cancel:SetScript("OnMouseUp", function() f:Hide() end)
+
+        self._importWin = Skin:ManagedWindow(f)
+    end
+    f.edit:SetText("")
+    f:Show()
+    f.edit:SetFocus()
+end
+
 -- ---------- roll detection ----------
 -- Expand existing /sr-aware roll: when raid leader links an item then players /roll,
 -- we collect for ROLL_DURATION and announce the SR-weighted winner.
@@ -388,8 +556,14 @@ function M:BuildUI(parent)
         self:Reserve(link); edit:SetText("")
     end)
 
+    local importBtn = Skin:Button(panel, "Import CSV", 90, 22)
+    importBtn:SetPoint("LEFT", rsvBtn, "RIGHT", 6, 0)
+    importBtn:SetScript("OnMouseUp", function() self:OpenImportDialog() end)
+    Skin:AttachTooltip(importBtn, "Import from softres.it",
+        {"Paste the CSV export from softres.it to load a whole raid's soft reserves in one go (leader only)."})
+
     local pickBtn = Skin:Button(panel, "Add from Loot DB", 130, 22)
-    pickBtn:SetPoint("LEFT", rsvBtn, "RIGHT", 6, 0)
+    pickBtn:SetPoint("LEFT", importBtn, "RIGHT", 6, 0)
     pickBtn:SetScript("OnMouseUp", function()
         if not RMS.LootPicker then RMS:Print("Loot picker not loaded.") return end
         local me = RMS:PlayerName()

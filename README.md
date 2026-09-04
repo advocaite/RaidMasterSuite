@@ -94,7 +94,7 @@ That's it — no Ace, no LibStub, no required deps. The addon is fully self-cont
 ## Module guide
 
 ### Soft Res
-Players send their reservations to the raid via the addon channel. When the corresponding item drops and the raid does an open `/roll`, the addon collects rolls for ~8 seconds and announces the SR-weighted winner to RAID_WARNING (leader only). Reservations persist across reloads in `RaidMasterSuiteDB.softresState`. Late joiners auto-request the current session from the host. **Re-opening a closed session keeps all existing reserves** (e.g. to let a late joiner pick) — only **Reset** clears the list.
+Players send their reservations to the raid via the addon channel. When the corresponding item drops and the raid does an open `/roll`, the addon collects rolls for ~8 seconds and announces the SR-weighted winner to RAID_WARNING (leader only). Reservations persist across reloads in `RaidMasterSuiteDB.softresState`. Late joiners auto-request the current session from the host. **Re-opening a closed session keeps all existing reserves** (e.g. to let a late joiner pick) — only **Reset** clears the list. **Import CSV** takes a [softres.it](https://softres.it) CSV export (paste into the popup) and opens a fresh, fully-synced session with the whole raid's reserves — quoted item names and duplicate rows handled.
 
 ### Hard Res
 Leader pre-assigns specific items to specific players. When the master looter opens a corpse, the addon scans the loot vs. assignments and prints `HR [Item] -> PlayerName` so you know exactly who gets it. Picker integrated with the Loot DB (see below).
@@ -128,6 +128,7 @@ Leader pre-assigns specific items to specific players. When the master looter op
 - Click a drop → see every eligible candidate with their **+1 count** and **BiS / SoftRes / HardRes** tags, sorted hard-res first, then rolls, then fewest +1s.
 - **Call Roll** announces the item and collects `/roll`s right in the window — timer configurable (3–60s, default 8), with an optional "5... 4... 3... 2... 1..." raid-chat countdown before the winner is announced.
 - **MS / OS / Transmog rolling**: every RMS raider gets a roll popup (item icon + name + timer) with **MS** (/roll 100), **OS** (/roll 99), **Transmog** (/roll 98) and **Pass** buttons; non-addon raiders just type the ranges from the announcement. The ML window tags each roll (green MS / gold OS / purple TM / grey PASS), sorts by priority, and the winner respects MS > OS > TM — an MS 12 beats an OS 99.
+- **Alt-click a bag item** (as leader/ML) to hand out already-looted loot: GDKP mode opens the Start Bid dialog (stack prefilled), normal mode calls an MS/OS/Transmog roll with the whole roster as candidates — trade the winner afterwards.
 - **Give** hands the item out via `GiveMasterLoot`, announces the award, logs it to history, and (optionally) marks the winner +1 automatically.
 
 ### Raid Comp

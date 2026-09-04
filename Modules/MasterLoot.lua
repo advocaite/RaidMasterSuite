@@ -837,6 +837,47 @@ RMS.Comm:On("masterloot", "rollend", function(_, sender)
     if M.rollPopup and M.rollPopup:IsShown() then M.rollPopup:Hide() end
 end)
 
+-- ---------- alt-click a bag item to roll / auction it ----------
+-- Roll an already-looted item straight from your bags: the ML window shows
+-- the whole roster as candidates (no corpse open -- trade the winner after).
+function M:StartBagRoll(link, count)
+    local id = tonumber(link and link:match("item:(%d+)"))
+    if not id then return end
+    local item = { slot = -1, id = id, link = link,
+                   name = link:match("%[(.-)%]") or link, count = count or 1 }
+    if not self._lootOpen then
+        self._testMode   = false
+        self._items      = { item }
+        self._selected   = -1
+        self._candidates = {}
+        for _, name in ipairs(RMS:GetRosterNames()) do
+            self._candidates[name] = 0
+        end
+        self:ShowWindow()
+    end
+    self:CallRoll(item)
+end
+
+-- GDKP mode on -> gold bid start dialog; off -> normal MS/OS/Tmog roll
+if not RMS._bagClickHooked then
+    RMS._bagClickHooked = true
+    hooksecurefunc("ContainerFrameItemButton_OnModifiedClick", function(btn, mouse)
+        if mouse ~= "LeftButton" or not IsAltKeyDown() then return end
+        if not (RMS:IsRaidLeader() or RMS:IsMasterLooter() or not RMS:InRaid()) then return end
+        local bag  = btn:GetParent():GetID()
+        local slot = btn:GetID()
+        local link = GetContainerItemLink(bag, slot)
+        if not link then return end
+        local _, count = GetContainerItemInfo(bag, slot)
+        if RMS.db.goldbid and RMS.db.goldbid.gdkpMode then
+            local gb = RMS:GetModule("goldbid")
+            if gb and gb.OpenStartDialog then gb:OpenStartDialog(link, count) end
+        else
+            M:StartBagRoll(link, count)
+        end
+    end)
+end
+
 -- ---------- main tab ----------
 function M:BuildUI(parent)
     local Skin = RMS.Skin

@@ -691,13 +691,18 @@ function M:BuildUI(parent)
     pickBtn:SetScript("OnMouseUp", function() M:_ShowAchievementPicker(achEdit) end)
 
     self._achEdit = achEdit  -- expose for global shift-click hook below
-    -- fields that accept shift-clicked links (items, achievements, quests...)
+    -- fields that accept shift-clicked links (items, achievements, quests,
+    -- professions...)
     self._linkEdits = { achEdit, notesEdit }
+    -- some link sources steal focus before we can check it; remember which
+    -- of our fields the user was just in
+    for _, e in ipairs(self._linkEdits) do
+        e:HookScript("OnEditFocusLost", function(s)
+            M._lastLinkEdit, M._lastFocusAt = s, GetTime()
+        end)
+    end
 
-    -- Shift-click links from any source (achievement frame, character pane,
-    -- bags, quest log, etc.) into whichever link-field has focus.
-    -- ChatEdit_InsertLink only fires when chat is active, so we hook the
-    -- lower-level entry point too.
+    -- Shift-click links from any source into whichever link-field has focus.
     if not RMS._advClickHooked then
         RMS._advClickHooked = true
         local function focusedLinkEdit()
@@ -705,14 +710,43 @@ function M:BuildUI(parent)
                 if e:IsVisible() and e:HasFocus() then return e end
             end
         end
+        local function recentLinkEdit()
+            local e = focusedLinkEdit()
+            if e then return e end
+            local le = M._lastLinkEdit
+            if le and le:IsVisible() and (GetTime() - (M._lastFocusAt or 0)) < 0.5 then
+                return le
+            end
+        end
         hooksecurefunc("ChatEdit_InsertLink", function(text)
             local e = focusedLinkEdit()
-            if e and text then e:Insert(text); return true end
+            if e and text then
+                e:Insert(text)
+                M._lastLinkInsert = { text = text, at = GetTime() }
+            end
         end)
         hooksecurefunc("HandleModifiedItemClick", function(link)
             if not link or not IsShiftKeyDown() then return end
             local e = focusedLinkEdit()
             if e then e:Insert(link) end
+        end)
+        -- Profession/tradeskill link buttons: with no chat edit active the
+        -- client calls ChatFrame_OpenChat(link) -- opening chat with the
+        -- link and stealing our focus. Redirect it into our field and shut
+        -- the chat box it just opened.
+        hooksecurefunc("ChatFrame_OpenChat", function(text)
+            if type(text) ~= "string" or not text:find("|H", 1, true) then return end
+            local li  = M._lastLinkInsert
+            local dup = li and li.text == text and (GetTime() - li.at) < 0.3
+            local e   = recentLinkEdit()
+            if not e and not dup then return end
+            if e and not dup then e:Insert(text) end
+            local eb = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
+            if eb then
+                eb:SetText("")
+                if ChatEdit_DeactivateChat then ChatEdit_DeactivateChat(eb) end
+            end
+            if e then e:SetFocus() end
         end)
     end
 
@@ -940,3 +974,49 @@ function M:Refresh()
     -- log
     self._ui.logScroll:SetData(self.cfg.log or {})
 end
+
+-- ---------- "To RMS" button on the profession window ----------
+-- Appends a link to the advert Notes field (works with the tab closed too).
+function M:AddNoteLink(link)
+    if not link or not self.cfg then return end
+    local cur = self.cfg.notes or ""
+    self.cfg.notes = (cur ~= "" and (cur.." ") or "")..link
+    if self._ui and self._ui.notesEdit then
+        -- SetText fires OnTextChanged, which syncs cfg and the preview
+        self._ui.notesEdit:SetText(self.cfg.notes)
+    end
+    RMS:Print("Added %s to your advert notes.", link)
+end
+
+function M:_HookTradeSkill()
+    if self._tsBtn or not TradeSkillFrame then return end
+    local Skin = RMS.Skin
+    local b = Skin:Button(TradeSkillFrame, "To RMS", 64, 18)
+    if TradeSkillFrameCloseButton then
+        b:SetPoint("RIGHT", TradeSkillFrameCloseButton, "LEFT", -68, 0)
+    else
+        b:SetPoint("TOPRIGHT", TradeSkillFrame, "TOPRIGHT", -132, -14)
+    end
+    b:SetFrameLevel(TradeSkillFrame:GetFrameLevel() + 5)
+    Skin:AttachTooltip(b, "Send to RMS",
+        {"Adds this profession's link to your Advertising notes."})
+    b:SetScript("OnMouseUp", function()
+        local link = GetTradeSkillListLink and GetTradeSkillListLink()
+        if link then
+            M:AddNoteLink(link)
+        else
+            RMS:Print("This profession window has no shareable link.")
+        end
+    end)
+    self._tsBtn = b
+end
+
+-- the tradeskill UI is load-on-demand; attach when it appears
+M.events = {
+    PLAYER_LOGIN = function(self)
+        if TradeSkillFrame then self:_HookTradeSkill() end
+    end,
+    ADDON_LOADED = function(self, _, name)
+        if name == "Blizzard_TradeSkillUI" then self:_HookTradeSkill() end
+    end,
+}
