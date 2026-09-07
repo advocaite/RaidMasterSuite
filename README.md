@@ -150,7 +150,8 @@ Leader pre-assigns specific items to specific players. When the master looter op
 - **Phase selector** in the BiS tab (also `/rms bis phase N`) so progressive realms see the right list, not just ICC.
 - Every phase has **alternates**: earlier-phase BiS cascades into later phases as ranked options (`+N alt` badge per slot), so you always see what to chase if the top item hasn't dropped.
 - On `LOOT_OPENED`, scans every loot item against every raider's BiS list. Pops a window listing who needs what, color-coded by class.
-- Per-row green ✓ tick if you already own the item (bags or equipped).
+- **Item tooltips** (BisTooltips-style, toggleable): hovering any item shows every phase/spec it's true BiS for ("BiS P3: Holy Paladin, Resto Shaman"), whether it's **your** BiS or an alternate for your spec, and — with the raid scan active — who in the raid needs it.
+- Per-row ticks: green ✓ = you own the BiS item, yellow = you own an alternate for that slot.
 - `+N alt` badge per slot opens a popup listing all alternates with hover tooltips.
 
 ### Advertising

@@ -36,6 +36,7 @@ Config.DEFAULTS = {
     bis = {
         useStatWeights = false,
         autoScanPopup  = true,  -- "who needs this" popup when loot opens
+        tooltips       = true,  -- BiS info lines on item tooltips
         -- phase: nil = newest available; set via the BiS tab phase buttons
     },
     plusone = {
@@ -225,6 +226,8 @@ function Config:BuildPanel(parent)
     addSection(col1, "BiS Scan")
     addCheck(col1, "Popup BiS needers on loot", "bis.autoScanPopup",
         "When loot opens, pop the window listing who needs the drops for BiS. Untick to disable the automatic scan popup.")
+    addCheck(col1, "BiS info on item tooltips", "bis.tooltips",
+        "Add lines to item tooltips: which phase/spec the item is BiS for, whether it's your BiS or an alternate, and who in the raid needs it.")
 
     addSection(col1, "Soft Res")
     addCheck(col1, "Auto-accept reservations", "softres.autoAccept", "Automatically accept incoming SR submissions when raid leader.")

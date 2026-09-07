@@ -14,9 +14,13 @@ local SLOTS = {
     "MainHand", "OffHand", "Ranged", "Relic",
 }
 
--- Green "owned" tick. Inline texture, because the shipped Segoe UI font has
--- no U+2713 glyph and renders it as "?".
-local OWNED_MARK = "|TInterface\\RaidFrame\\ReadyCheck-Ready:12:12|t "
+-- Owned ticks. Inline textures, because the shipped Segoe UI font has no
+-- U+2713 glyph and renders it as "?". Green = you own the BiS item itself,
+-- yellow = you own an alternate for that slot.
+local OWNED_MARK     = "|TInterface\\RaidFrame\\ReadyCheck-Ready:12:12|t "
+-- UI-CheckBox-Check is the gold/yellow checkmark (ReadyCheck-Waiting is
+-- literally a question mark, not a tick)
+local ALT_OWNED_MARK = "|TInterface\\Buttons\\UI-CheckBox-Check:14:14|t "
 
 -- True if the player owns this item (in bags OR equipped).
 local function playerHasItem(id)
@@ -402,7 +406,10 @@ function M:_ShowAltsPopup(anchor, slot, ids)
             r._bg:SetVertexColor(i % 2 == 0 and 0.10 or 0.13, 0.10, 0.13, 0.5)
             r.rank:SetText((i == 1) and "|cffffd070BiS|r" or ("alt"..(i - 1)))
             local _, link = GetItemInfo(id)
-            local prefix = playerHasItem(id) and OWNED_MARK or ""
+            local prefix = ""
+            if playerHasItem(id) then
+                prefix = (i == 1) and OWNED_MARK or ALT_OWNED_MARK
+            end
             r.name:SetText(prefix..(link or ("|cffaaaaaaitem:"..id.."|r")))
             r:Show()
         else
@@ -474,7 +481,7 @@ function M:BuildUI(parent)
     Skin:Font(ownedHint, 10, false)
     ownedHint:SetTextColor(unpack(C.textDim))
     ownedHint:SetPoint("RIGHT", -8, 0)
-    ownedHint:SetText("|TInterface\\RaidFrame\\ReadyCheck-Ready:11:11|t = you own it")
+    ownedHint:SetText("|TInterface\\RaidFrame\\ReadyCheck-Ready:11:11|t = BiS owned   |TInterface\\Buttons\\UI-CheckBox-Check:13:13|t = alt owned")
 
     local function buildSlotRow(parent)
         local r = CreateFrame("Frame", nil, parent)
@@ -521,7 +528,14 @@ function M:BuildUI(parent)
             local id = item.ids[1]
             r.hover._id = id
             local _, link = GetItemInfo(id)
-            local prefix = playerHasItem(id) and OWNED_MARK or ""
+            local prefix = ""
+            if playerHasItem(id) then
+                prefix = OWNED_MARK
+            else
+                for i = 2, #item.ids do
+                    if playerHasItem(item.ids[i]) then prefix = ALT_OWNED_MARK; break end
+                end
+            end
             r.item:SetText(prefix..(link or ("|cffaaaaaaitem:"..id.."|r")))
             if #item.ids > 1 then
                 r.altsBtn:Show()
@@ -634,6 +648,113 @@ function M:Refresh()
         end)
     elseif not anyMissing then
         self._retries = nil
+    end
+end
+
+-- ---------- item tooltips ----------
+-- Reverse index built once on first use: itemID -> every {phase, class,
+-- spec, slot, rank} that lists it. Makes tooltip lookups instant.
+local bisIndex
+local function getBiSIndex()
+    if bisIndex then return bisIndex end
+    bisIndex = {}
+    for phase, classes in pairs(RMS.BiSPhases or {}) do
+        for class, specs in pairs(classes) do
+            for spec, slots in pairs(specs) do
+                for slot, ids in pairs(slots) do
+                    for rank, id in ipairs(ids) do
+                        local t = bisIndex[id]
+                        if not t then t = {}; bisIndex[id] = t end
+                        t[#t+1] = { phase = phase, class = class, spec = spec,
+                                    slot = slot, rank = rank }
+                    end
+                end
+            end
+        end
+    end
+    return bisIndex
+end
+
+local function specDisplay(spec)
+    return (spec or "?"):gsub("_", " ")
+end
+
+local function addTooltipInfo(tip)
+    if RMS.db and RMS.db.bis and RMS.db.bis.tooltips == false then return end
+    local _, link = tip:GetItem()
+    local id = link and tonumber(link:match("item:(%d+)"))
+    if not id then return end
+    local added = false
+
+    -- BiSTooltips-style: every phase where this item is the true (rank 1)
+    -- BiS for some spec. Cascaded alternates are rank 2+, so this stays
+    -- one line per native phase.
+    local entries = getBiSIndex()[id]
+    if entries then
+        local byPhase = {}
+        for _, e in ipairs(entries) do
+            if e.rank == 1 then
+                byPhase[e.phase] = byPhase[e.phase] or {}
+                local list = byPhase[e.phase]
+                list[#list+1] = CLASS_COLOR(e.class)..specDisplay(e.spec).." "..classDisplay(e.class).."|r"
+            end
+        end
+        local phases = {}
+        for p in pairs(byPhase) do phases[#phases+1] = p end
+        table.sort(phases)
+        for _, p in ipairs(phases) do
+            local names = byPhase[p]
+            local txt
+            if #names > 4 then
+                txt = table.concat(names, ", ", 1, 4)..(" |cff888888+%d more|r"):format(#names - 4)
+            else
+                txt = table.concat(names, ", ")
+            end
+            tip:AddLine(("|cffffd070BiS %s:|r %s"):format(p == 0 and "Pre-Raid" or ("P"..p), txt), 1, 1, 1, true)
+            added = true
+        end
+    end
+
+    -- personal: your class+spec at your selected phase (alternates included)
+    local me = RMS:PlayerName()
+    local mine = M.peers[me]
+    if mine and mine.class and mine.spec then
+        local slot, rank = M:FindBiSRank(id, mine.class, mine.spec)
+        if slot then
+            if rank == 1 then
+                tip:AddLine(("|cff60ff60Your BiS|r |cff888888(%s %s)|r"):format(specDisplay(mine.spec), slot), 1, 1, 1)
+            else
+                tip:AddLine(("|cffffd070Your alternate #%d|r |cff888888(%s %s)|r"):format(rank - 1, specDisplay(mine.spec), slot), 1, 1, 1)
+            end
+            added = true
+        end
+    end
+
+    -- live raid scan: who broadcast a spec that needs this item
+    local peerCount = 0
+    for _ in pairs(M.peers) do peerCount = peerCount + 1 end
+    if peerCount > 1 then
+        local names = {}
+        for _, n in ipairs(M:NeedersFor(id)) do
+            if n.player ~= me then
+                names[#names+1] = CLASS_COLOR(n.class)..n.player.."|r"
+                    ..((n.rank or 1) > 1 and " |cff888888(alt)|r" or "")
+                if #names >= 4 then break end
+            end
+        end
+        if #names > 0 then
+            tip:AddLine("|cffffd070Needed by:|r "..table.concat(names, ", "), 1, 1, 1, true)
+            added = true
+        end
+    end
+
+    if added then tip:Show() end
+end
+
+for _, tipName in ipairs({ "GameTooltip", "ItemRefTooltip" }) do
+    local tip = _G[tipName]
+    if tip and tip.HookScript then
+        tip:HookScript("OnTooltipSetItem", addTooltipInfo)
     end
 end
 
