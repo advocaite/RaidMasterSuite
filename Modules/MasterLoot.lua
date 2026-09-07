@@ -863,7 +863,8 @@ if not RMS._bagClickHooked then
     RMS._bagClickHooked = true
     hooksecurefunc("ContainerFrameItemButton_OnModifiedClick", function(btn, mouse)
         if mouse ~= "LeftButton" or not IsAltKeyDown() then return end
-        if not (RMS:IsRaidLeader() or RMS:IsMasterLooter() or not RMS:InRaid()) then return end
+        -- assists too: when the ML's bags fill up, loot gets passed to them
+        if not (RMS:IsAssist() or RMS:IsMasterLooter() or not RMS:InRaid()) then return end
         local bag  = btn:GetParent():GetID()
         local slot = btn:GetID()
         local link = GetContainerItemLink(bag, slot)

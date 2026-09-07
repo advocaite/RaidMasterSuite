@@ -103,8 +103,8 @@ function M:Start(itemLink, opts)
         RMS:Print("A bid session is already running. Cancel it first.")
         return
     end
-    if not (RMS:IsRaidLeader() or RMS:IsMasterLooter() or not RMS:InRaid()) then
-        RMS:Print("Only the raid leader or master looter can start a bid.")
+    if not (RMS:IsAssist() or RMS:IsMasterLooter() or not RMS:InRaid()) then
+        RMS:Print("Only the raid leader, an assist or the master looter can start a bid.")
         return
     end
     local itemID = tonumber(itemLink and itemLink:match("item:(%d+)"))
