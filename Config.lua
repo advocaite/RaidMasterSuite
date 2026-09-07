@@ -7,6 +7,7 @@ RMS.Config = Config
 
 Config.DEFAULTS = {
     debug = false,
+    experimental = false,  -- extra tooltip data: item sources, gem suggestions
     minimap = { hide = false, angle = 215 },
     softres = {
         autoAccept    = true,
@@ -188,6 +189,8 @@ function Config:BuildPanel(parent)
     addCheck(col1, "Open window on login / reload", "ui.openOnLogin",
         "Automatically show the Raid Master Suite main window when you log in or reload.")
     addCheck(col1, "Enable debug logging", "debug", "Print verbose debug messages to chat.")
+    addCheck(col1, "Experimental features", "experimental",
+        "Extra data that is still being tuned: item drop sources (boss + 10/25 instance) and suggested gems on BiS tooltips.")
     local hideMm = addCheck(col1, "Hide minimap button", "minimap.hide",
         "Remove the round Raid Master Suite button from the minimap edge.")
     local hideMmOrig = hideMm.OnValueChanged

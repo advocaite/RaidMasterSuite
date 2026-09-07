@@ -679,6 +679,29 @@ local function specDisplay(spec)
     return (spec or "?"):gsub("_", " ")
 end
 
+-- itemID -> up to two "Boss, Instance (size)" strings from the Loot DB
+local sourceIndex
+local function getSourceIndex()
+    if sourceIndex then return sourceIndex end
+    sourceIndex = {}
+    for _, instances in pairs(RMS.LootDB or {}) do
+        for inst, bosses in pairs(instances) do
+            for boss, items in pairs(bosses) do
+                for _, it in ipairs(items) do
+                    local iid = it[1]
+                    local t = sourceIndex[iid]
+                    if not t then t = {}; sourceIndex[iid] = t end
+                    if #t < 2 then
+                        local entry = boss..", "..inst
+                        if t[1] ~= entry then t[#t+1] = entry end
+                    end
+                end
+            end
+        end
+    end
+    return sourceIndex
+end
+
 local function addTooltipInfo(tip)
     if RMS.db and RMS.db.bis and RMS.db.bis.tooltips == false then return end
     local _, link = tip:GetItem()
@@ -718,13 +741,14 @@ local function addTooltipInfo(tip)
     -- personal: your class+spec at your selected phase (alternates included)
     local me = RMS:PlayerName()
     local mine = M.peers[me]
+    local mySlot, myRank
     if mine and mine.class and mine.spec then
-        local slot, rank = M:FindBiSRank(id, mine.class, mine.spec)
-        if slot then
-            if rank == 1 then
-                tip:AddLine(("|cff60ff60Your BiS|r |cff888888(%s %s)|r"):format(specDisplay(mine.spec), slot), 1, 1, 1)
+        mySlot, myRank = M:FindBiSRank(id, mine.class, mine.spec)
+        if mySlot then
+            if myRank == 1 then
+                tip:AddLine(("|cff60ff60Your BiS|r |cff888888(%s %s)|r"):format(specDisplay(mine.spec), mySlot), 1, 1, 1)
             else
-                tip:AddLine(("|cffffd070Your alternate #%d|r |cff888888(%s %s)|r"):format(rank - 1, specDisplay(mine.spec), slot), 1, 1, 1)
+                tip:AddLine(("|cffffd070Your alternate #%d|r |cff888888(%s %s)|r"):format(myRank - 1, specDisplay(mine.spec), mySlot), 1, 1, 1)
             end
             added = true
         end
@@ -745,6 +769,31 @@ local function addTooltipInfo(tip)
         if #names > 0 then
             tip:AddLine("|cffffd070Needed by:|r "..table.concat(names, ", "), 1, 1, 1, true)
             added = true
+        end
+    end
+
+    -- experimental extras: where it drops + suggested gems for your BiS
+    if RMS.db and RMS.db.experimental then
+        local srcs = getSourceIndex()[id]
+        if srcs and #srcs > 0 then
+            tip:AddLine("|cffffd070Source:|r "..table.concat(srcs, "  |cff888888/|r  "), 1, 1, 1, true)
+            added = true
+        end
+        if mySlot and myRank == 1 and mine then
+            local meta = RMS.BiSMeta and RMS.BiSMeta[M:GetPhase()]
+            meta = meta and meta[mine.class]
+            meta = meta and meta[mine.spec]
+            meta = meta and meta[mySlot]
+            if meta and meta.g and #meta.g > 0 then
+                local gems = {}
+                for _, gid in ipairs(meta.g) do
+                    local _, glink = GetItemInfo(gid)
+                    if not glink then warmItem(gid) end
+                    gems[#gems+1] = glink or ("|cffaaaaaa(gem "..gid..")|r")
+                end
+                tip:AddLine("|cffffd070Suggested gems:|r "..table.concat(gems, " "), 1, 1, 1, true)
+                added = true
+            end
         end
     end
 

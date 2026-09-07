@@ -21,7 +21,7 @@ An all-in-one raid utility addon for **World of Warcraft 3.3.5a (WOTLK)**. Soft 
 | **Gold Bid** | Full GDKP toolkit: live auctions with chat bidding (no addon needed to bid), per-item start price/increment/stack, raid-wide pot tracking, cut / bonus-pool / split payout calculator, per-player budgets visible to leadership. |
 | **BiS Scan** | Detects each raider's class/spec, scans every loot drop, popup of who needs it. Per-phase BiS lists (Pre-Raid → ICC). |
 | **Advertise**| Structured ad builder: run type, GS, achievement links, reserved BOE/patterns/orbs, needed classes & role counts, live 255-char counter, timed auto-broadcast. |
-| **Settings** | All thresholds, defaults, and toggles — plus a **Style** section (global window opacity slider, more coming). |
+| **Settings** | All thresholds, defaults, and toggles — plus a **Style** section (global window opacity slider) and an **Experimental features** switch (tooltip drop sources, gem suggestions). |
 | **Donate**   | How to support the author via server coin gifting or in-game gold mail.                     |
 
 All raid-side features sync automatically over the **`RMS` addon channel** (RAID / PARTY) so every member running the addon sees the same state in real time. DKP uses the **GUILD** channel and is officer-gated. A draggable **crown minimap button** toggles the window (left-click), opens Settings (right-click), and can be hidden in Settings.
@@ -151,6 +151,7 @@ Leader pre-assigns specific items to specific players. When the master looter op
 - Every phase has **alternates**: earlier-phase BiS cascades into later phases as ranked options (`+N alt` badge per slot), so you always see what to chase if the top item hasn't dropped.
 - On `LOOT_OPENED`, scans every loot item against every raider's BiS list. Pops a window listing who needs what, color-coded by class.
 - **Item tooltips** (BisTooltips-style, toggleable): hovering any item shows every phase/spec it's true BiS for ("BiS P3: Holy Paladin, Resto Shaman"), whether it's **your** BiS or an alternate for your spec, and — with the raid scan active — who in the raid needs it.
+- **Experimental features** (Settings → General): adds **drop sources** to tooltips (boss + instance incl. 10/25/HC, from the Loot DB) and **suggested gems** for your BiS pieces (from the WoWSims gear sets).
 - Per-row ticks: green ✓ = you own the BiS item, yellow = you own an alternate for that slot.
 - `+N alt` badge per slot opens a popup listing all alternates with hover tooltips.
 
